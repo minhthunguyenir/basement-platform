@@ -79,7 +79,7 @@ export class HealthController {
 
     // 3. Nếu người dùng chỉ định query ?branch=...
     if (specificBranch) {
-      const records = await this.prisma.withBranch(specificBranch, async (tx) => {
+      const records = await this.prisma.withBranch(specificBranch, (tx) => {
         return tx.$queryRawUnsafe<Array<{ id: string; branch_code: string; title: string; created_at: Date }>>(
           `SELECT id, branch_code, title, created_at FROM "branch_samples";`,
         );
@@ -97,17 +97,17 @@ export class HealthController {
 
     // 4. Kiểm tra cô lập dữ liệu tự động giữa 3 chi nhánh: HCM, DAD, VCA
     const [hcmRecords, dadRecords, vcaRecords, unauthorizedRecords] = await Promise.all([
-      this.prisma.withBranch('HCM', async (tx) => {
+      this.prisma.withBranch('HCM', (tx) => {
         return tx.$queryRawUnsafe<Array<{ id: string; branch_code: string; title: string }>>(
           `SELECT id, branch_code, title FROM "branch_samples";`,
         );
       }),
-      this.prisma.withBranch('DAD', async (tx) => {
+      this.prisma.withBranch('DAD', (tx) => {
         return tx.$queryRawUnsafe<Array<{ id: string; branch_code: string; title: string }>>(
           `SELECT id, branch_code, title FROM "branch_samples";`,
         );
       }),
-      this.prisma.withBranch('VCA', async (tx) => {
+      this.prisma.withBranch('VCA', (tx) => {
         return tx.$queryRawUnsafe<Array<{ id: string; branch_code: string; title: string }>>(
           `SELECT id, branch_code, title FROM "branch_samples";`,
         );

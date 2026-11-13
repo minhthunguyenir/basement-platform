@@ -72,6 +72,9 @@ basement-platform/
 │   ├── eslint-config/              # Shared ESLint configuration
 │   └── tsconfig/                   # Shared TypeScript configurations
 │
+├── .github/
+│   └── workflows/
+│       └── ci.yml                  # GitHub Actions CI (lint, build workspace)
 ├── .dockerignore                   # Loại trừ node_modules, .next, dist khi build image
 ├── docker-compose.yml              # Dựng đồng thời postgres, redis, api, web
 ├── .env.example                    # Template biến môi trường chuẩn
@@ -153,6 +156,7 @@ docker compose up -d
 Các dịch vụ sẽ sẵn sàng:
 - **Frontend Web (`web`):** [http://localhost:3000](http://localhost:3000) (hỗ trợ hot-reload qua volume mount)
 - **Backend API (`api`):** [http://localhost:3001](http://localhost:3001) (hỗ trợ watch mode)
+- **Swagger API Docs:** [http://localhost:3001/api/docs](http://localhost:3001/api/docs) (giao diện tương tác Swagger UI)
 - **PostgreSQL (`postgres`):** `localhost:5432` (kèm pgvector)
 - **Redis (`redis`):** `localhost:6379`
 

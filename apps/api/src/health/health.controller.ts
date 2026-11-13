@@ -1,11 +1,26 @@
 import { Controller, Get, Query } from '@nestjs/common';
+import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { PrismaService } from '../prisma/prisma.service';
 
+@ApiTags('health')
 @Controller('health')
 export class HealthController {
   constructor(private readonly prisma: PrismaService) {}
 
   @Get()
+  @ApiOperation({ summary: 'Kiểm tra trạng thái hoạt động của dịch vụ API' })
+  @ApiResponse({
+    status: 200,
+    description: 'Dịch vụ API đang hoạt động bình thường',
+    schema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', example: 'ok' },
+        service: { type: 'string', example: '@basement/api' },
+        timestamp: { type: 'string', example: '2026-11-13T04:30:00.000Z' },
+      },
+    },
+  })
   getHealth() {
     return {
       status: 'ok',
@@ -15,6 +30,21 @@ export class HealthController {
   }
 
   @Get('rls-test')
+  @ApiOperation({
+    summary: 'Kiểm thử kết nối PostgreSQL, pgvector và tính cô lập dữ liệu theo chi nhánh (Row-Level Security - RLS)',
+    description:
+      'Tự động kiểm tra tính cô lập dữ liệu giữa 3 chi nhánh (HCM, DAD, VCA) hoặc truy vấn dữ liệu của một chi nhánh cụ thể thông qua policy Row-Level Security.',
+  })
+  @ApiQuery({
+    name: 'branch',
+    required: false,
+    description: 'Mã chi nhánh cần kiểm tra dữ liệu (ví dụ: HCM, DAD, VCA)',
+    example: 'HCM',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Kết quả kiểm tra kết nối cơ sở dữ liệu và tính toàn vẹn của chính sách Row-Level Security',
+  })
   async testRowLevelSecurity(@Query('branch') specificBranch?: string) {
     // 1. Kiểm tra kết nối và pgvector extension
     const extensionCheck = await this.prisma.$queryRawUnsafe<Array<{ extname: string; extversion: string }>>(
@@ -49,7 +79,7 @@ export class HealthController {
 
     // 3. Nếu người dùng chỉ định query ?branch=...
     if (specificBranch) {
-      const records = await this.prisma.withBranch(specificBranch, async (tx) => {
+      const records = await this.prisma.withBranch(specificBranch, (tx) => {
         return tx.$queryRawUnsafe<Array<{ id: string; branch_code: string; title: string; created_at: Date }>>(
           `SELECT id, branch_code, title, created_at FROM "branch_samples";`,
         );
@@ -67,17 +97,17 @@ export class HealthController {
 
     // 4. Kiểm tra cô lập dữ liệu tự động giữa 3 chi nhánh: HCM, DAD, VCA
     const [hcmRecords, dadRecords, vcaRecords, unauthorizedRecords] = await Promise.all([
-      this.prisma.withBranch('HCM', async (tx) => {
+      this.prisma.withBranch('HCM', (tx) => {
         return tx.$queryRawUnsafe<Array<{ id: string; branch_code: string; title: string }>>(
           `SELECT id, branch_code, title FROM "branch_samples";`,
         );
       }),
-      this.prisma.withBranch('DAD', async (tx) => {
+      this.prisma.withBranch('DAD', (tx) => {
         return tx.$queryRawUnsafe<Array<{ id: string; branch_code: string; title: string }>>(
           `SELECT id, branch_code, title FROM "branch_samples";`,
         );
       }),
-      this.prisma.withBranch('VCA', async (tx) => {
+      this.prisma.withBranch('VCA', (tx) => {
         return tx.$queryRawUnsafe<Array<{ id: string; branch_code: string; title: string }>>(
           `SELECT id, branch_code, title FROM "branch_samples";`,
         );

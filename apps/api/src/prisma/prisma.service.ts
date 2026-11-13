@@ -29,7 +29,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
    * `SET LOCAL ROLE basement_app` đảm bảo role không phải superuser để RLS bắt buộc có hiệu lực.
    * `SET LOCAL app.current_branch` áp dụng an toàn trong phạm vi transaction hiện tại.
    */
-  async withBranch<T>(
+  withBranch<T>(
     branchCode: string,
     callback: (tx: PrismaService) => Promise<T>,
   ): Promise<T> {
@@ -37,7 +37,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       // Chuyển sang app role tuân thủ RLS
       await tx.$executeRawUnsafe(`SET LOCAL ROLE basement_app;`);
       // Escape để chống SQL Injection
-      const sanitizedBranch = branchCode.replace(/'/g, "''");
+      const sanitizedBranch = branchCode.replaceAll("'", "''");
       await tx.$executeRawUnsafe(`SET LOCAL app.current_branch = '${sanitizedBranch}';`);
       return callback(tx as unknown as PrismaService);
     });

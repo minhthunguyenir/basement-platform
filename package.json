@@ -1,0 +1,17 @@
+{
+  "name": "basement-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Basement Platform Monorepo",
+  "scripts": {
+    "dev": "pnpm --filter \"@basement/*\" --parallel run dev",
+    "build": "pnpm --filter \"@basement/*\" run build",
+    "lint": "pnpm --filter \"@basement/*\" run lint",
+    "test": "pnpm --filter \"@basement/*\" run test"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@12.18.0",
+  "type": "module"
+}

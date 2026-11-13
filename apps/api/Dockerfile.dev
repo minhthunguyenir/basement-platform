@@ -1,0 +1,30 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Enable corepack for pnpm & install native runtime dependencies for Prisma on Alpine
+RUN corepack enable && corepack prepare pnpm@latest --activate \
+    && apk add --no-cache openssl libc6-compat
+
+# Copy workspace configurations and manifests
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/api/package.json ./apps/api/
+COPY apps/api/prisma ./apps/api/prisma/
+
+# Install workspace dependencies for @basement/api
+RUN pnpm install --filter @basement/api...
+
+# Generate Prisma Client
+WORKDIR /app/apps/api
+RUN npx prisma generate
+
+WORKDIR /app
+
+# Copy application source code
+COPY apps/api ./apps/api
+
+WORKDIR /app/apps/api
+
+EXPOSE 3001
+
+CMD ["pnpm", "run", "dev"]

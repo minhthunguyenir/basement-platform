@@ -12,9 +12,9 @@ Dự án nền tảng **Basement Platform** được xây dựng theo kiến tr�
     - [Clone Repository](#1-clone-repository)
     - [Cài đặt Dependencies](#2-cài-đặt-dependencies)
     - [Cấu hình Biến môi trường](#3-cấu-hình-biến-môi-trường)
-    - [Khởi chạy Database & Cache (Docker)](#4-khởi-chạy-database--cache-docker)
-    - [Cấu hình Prisma & Database Migration](#5-cấu-hình-prisma--database-migration)
-    - [Chạy Ứng dụng trong Môi trường Phát triển](#6-chạy-ứng-dụng-trong-môi-trường-phát-triển)
+    - [Khởi chạy với Docker Compose (Tất cả dịch vụ)](#4-khởi-chạy-với-docker-compose-tất-cả-dịch-vụ)
+    - [Cấu hình Prisma & Database Migration (RLS)](#5-cấu-hình-prisma--database-migration-rls)
+    - [Chạy Ứng dụng trong Môi trường Phát triển (Native pnpm)](#6-chạy-ứng-dụng-trong-môi-trường-phát-triển-native-pnpm)
 5. [Các Lệnh pnpm Thường Dùng](#-các-lệnh-pnpm-thường-dùng)
 6. [Quy trình Tạo Nhánh & Pull Request (Git Workflow)](#-quy-trình-tạo-nhánh--pull-request-git-workflow)
     - [Quy ước Đặt tên Nhánh](#quy-ước-đặt-tên-nhánh)
@@ -41,8 +41,6 @@ Dự án nền tảng **Basement Platform** được xây dựng theo kiến tr�
 
 ## 📁 Cấu trúc Thư mục Dự án
 
-> 💡 **Ghi chú về hiện trạng repo:** Repository hiện tại vừa được khởi tạo (`Initial commit`). Dưới đây là cấu trúc thư mục quy chuẩn của dự án monorepo được thiết lập cho các ứng dụng và gói dùng chung:
-
 ```text
 basement-platform/
 ├── apps/
@@ -51,17 +49,20 @@ basement-platform/
 │   │   │   ├── app/                # Next.js App Router
 │   │   │   └── components/
 │   │   ├── public/
+│   │   ├── Dockerfile.dev          # Docker build dev hỗ trợ hot-reload (Port 3000)
 │   │   ├── tailwind.config.ts
 │   │   ├── tsconfig.json
 │   │   └── package.json            # Name: @basement/web
 │   │
 │   └── api/                        # Backend Application (NestJS + Prisma)
 │       ├── src/
-│       │   ├── modules/
-│       │   └── main.ts
+│       │   ├── prisma/             # PrismaService tích hợp withBranch RLS
+│       │   ├── health/             # Health check & test RLS endpoint
+│       │   └── main.ts             # Port 3001
 │       ├── prisma/
 │       │   ├── schema.prisma       # Prisma Schema (PostgreSQL + pgvector)
-│       │   └── migrations/
+│       │   └── migrations/         # Chứa migration SQL & RLS policies
+│       ├── Dockerfile.dev          # Docker build dev hỗ trợ hot-reload (Port 3001)
 │       ├── tsconfig.json
 │       └── package.json            # Name: @basement/api
 │
@@ -71,12 +72,12 @@ basement-platform/
 │   ├── eslint-config/              # Shared ESLint configuration
 │   └── tsconfig/                   # Shared TypeScript configurations
 │
-├── docker/                         # Docker configurations (hoặc docker-compose.yml ở root)
-│   └── docker-compose.yml          # PostgreSQL (pgvector) & Redis services
-│
-├── .env.example                    # Template biến môi trường chung
-├── .gitignore                      # Git ignore file (đã cấu hình cho Node, Next, Nest, Prisma, OS)
-├── package.json                    # Root package.json (quản lý scripts toàn repo)
+├── .dockerignore                   # Loại trừ node_modules, .next, dist khi build image
+├── docker-compose.yml              # Dựng đồng thời postgres, redis, api, web
+├── .env.example                    # Template biến môi trường chuẩn
+├── .env                            # Biến môi trường local
+├── .gitignore                      # Git ignore file (bảo vệ secrets, cache, OS files)
+├── package.json                    # Root package.json (chạy song song dev, build, lint)
 ├── pnpm-workspace.yaml             # Cấu hình workspace của pnpm
 └── README.md                       # Tài liệu hướng dẫn dự án
 ```
@@ -86,9 +87,9 @@ basement-platform/
 ## ⚙️ Yêu cầu Hệ thống (Prerequisites)
 
 - **Node.js**: >= `20.x` (LTS khuyến nghị)
-- **pnpm**: >= `9.x`
+- **pnpm**: >= `9.x` (khuyến nghị `pnpm@12.x`)
     - Cài đặt pnpm nếu chưa có: `npm install -g pnpm` hoặc `corepack enable && corepack prepare pnpm@latest --activate`
-- **Docker & Docker Compose**: Để chạy PostgreSQL (pgvector) và Redis cục bộ.
+- **Docker & Docker Compose**: Để chạy PostgreSQL (pgvector), Redis, API và Web.
 - **Git**
 
 ---
@@ -108,58 +109,79 @@ pnpm install
 ```
 
 ### 3. Cấu hình Biến môi trường
-Sao chép file `.env.example` sang `.env` ở root hoặc trong từng ứng dụng:
+Sao chép file `.env.example` sang `.env` ở thư mục gốc:
 
 ```bash
-# Tạo file .env từ template mẫu
 cp .env.example .env
 ```
 
-Cấu hình các tham số môi trường cơ bản:
+Các tham số cấu hình chính:
 ```env
 # Database (PostgreSQL + pgvector)
+# Chạy ngoài Docker (localhost):
 DATABASE_URL="postgresql://postgres:postgres@localhost:5432/basement_db?schema=public"
+# Chạy trong container Docker:
+# DATABASE_URL="postgresql://postgres:postgres@postgres:5432/basement_db?schema=public"
+
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+POSTGRES_DB=basement_db
+POSTGRES_PORT=5432
 
 # Redis
-REDIS_HOST="localhost"
-REDIS_PORT=6379
 REDIS_URL="redis://localhost:6379"
+REDIS_HOST=localhost
+REDIS_PORT=6379
 
 # Backend API
+PORT=3001
 API_PORT=3001
 API_URL="http://localhost:3001"
 
 # Frontend Web
+WEB_PORT=3000
 NEXT_PUBLIC_API_URL="http://localhost:3001"
-PORT=3000
 ```
 
-### 4. Khởi chạy Database & Cache (Docker)
-Chạy PostgreSQL (hỗ trợ `pgvector`) và Redis bằng Docker Compose:
+### 4. Khởi chạy với Docker Compose (Tất cả dịch vụ)
+Dự án được cấu hình sẵn file `docker-compose.yml` ở thư mục gốc để khởi chạy **toàn bộ 4 dịch vụ** (`postgres`, `redis`, `api`, `web`) chỉ bằng một câu lệnh:
 
 ```bash
 docker compose up -d
 ```
 
-*(Nếu file `docker-compose.yml` nằm trong thư mục `docker/`, dùng lệnh `docker compose -f docker/docker-compose.yml up -d`)*.
+Các dịch vụ sẽ sẵn sàng:
+- **Frontend Web (`web`):** [http://localhost:3000](http://localhost:3000) (hỗ trợ hot-reload qua volume mount)
+- **Backend API (`api`):** [http://localhost:3001](http://localhost:3001) (hỗ trợ watch mode)
+- **PostgreSQL (`postgres`):** `localhost:5432` (kèm pgvector)
+- **Redis (`redis`):** `localhost:6379`
 
-Mẫu dịch vụ trong `docker-compose.yml`:
+> 💡 **Mẹo:** Nếu chỉ muốn chạy Database và Redis trên Docker, sau đó chạy code trực tiếp trên máy bằng pnpm, dùng lệnh:
+> ```bash
+> docker compose up -d postgres redis
+> pnpm dev
+> ```
+
+Nội dung cấu hình `docker-compose.yml`:
 ```yaml
-version: '3.8'
-
 services:
   postgres:
     image: pgvector/pgvector:pg16
     container_name: basement_postgres
     restart: always
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: basement_db
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-basement_db}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-basement_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
@@ -169,51 +191,103 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile.dev
+    container_name: basement_api
+    restart: always
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=development
+      - PORT=3001
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-basement_db}?schema=public
+      - REDIS_URL=redis://redis:6379
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      - ./apps/api:/app/apps/api
+      - /app/apps/api/node_modules
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile.dev
+    container_name: basement_web
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+      - NEXT_PUBLIC_API_URL=http://localhost:3001
+    volumes:
+      - ./apps/web:/app/apps/web
+      - /app/apps/web/node_modules
+      - /app/node_modules
+    depends_on:
+      - api
 
 volumes:
   postgres_data:
   redis_data:
 ```
 
-### 5. Cấu hình Prisma & Database Migration
-Khởi tạo extension `pgvector` và đồng bộ schema vào cơ sở dữ liệu:
+### 5. Cấu hình Prisma & Database Migration (RLS)
+Áp dụng Prisma migration lên PostgreSQL và sinh Prisma Client:
 
 ```bash
 # Tạo Prisma Client
 pnpm --filter @basement/api prisma generate
 
-# Chạy migration lên cơ sở dữ liệu dev
+# Áp dụng migration (bao gồm kích hoạt pgvector và chính sách Row-Level Security)
 pnpm --filter @basement/api prisma migrate dev
 
 # (Tùy chọn) Mở giao diện Prisma Studio để kiểm tra dữ liệu
 pnpm --filter @basement/api prisma studio
 ```
 
-> **Lưu ý về pgvector trong Prisma:** Trong schema Prisma (`apps/api/prisma/schema.prisma`), cần bật preview feature `postgresqlExtensions` và khai báo extension `vector`:
-> ```prisma
-> datasource db {
->   provider   = "postgresql"
->   url        = env("DATABASE_URL")
->   extensions = [vector]
-> }
-> ```
+#### Kiểm thử Row-Level Security (RLS)
+API cung cấp sẵn endpoint kiểm tra kết nối database và cơ chế phân quyền cô lập dữ liệu theo từng chi nhánh (`app.current_branch`):
 
-### 6. Chạy Ứng dụng trong Môi trường Phát triển
-Chạy đồng thời cả Frontend và Backend:
 ```bash
+# Kiểm tra tự động tính cô lập dữ liệu giữa 3 chi nhánh (HCM, DAD, VCA):
+curl http://localhost:3001/health/rls-test
+
+# Truy vấn dữ liệu riêng cho từng chi nhánh:
+curl "http://localhost:3001/health/rls-test?branch=HCM"
+curl "http://localhost:3001/health/rls-test?branch=DAD"
+curl "http://localhost:3001/health/rls-test?branch=VCA"
+```
+
+### 6. Chạy Ứng dụng trong Môi trường Phát triển (Native pnpm)
+Nếu phát triển trực tiếp trên máy chủ máy trạm (không qua container web/api):
+```bash
+# Chạy đồng thời cả Frontend và Backend bằng script song song ở root:
 pnpm dev
 ```
 Hoặc chạy riêng từng ứng dụng theo bộ lọc `--filter`:
 ```bash
-# Chạy riêng Backend NestJS
+# Chạy riêng Backend NestJS (Port 3001)
 pnpm --filter @basement/api dev
 
-# Chạy riêng Frontend Next.js
+# Chạy riêng Frontend Next.js (Port 3000)
 pnpm --filter @basement/web dev
 ```
-
-- **Frontend Web:** truy cập tại [http://localhost:3000](http://localhost:3000)
-- **Backend API:** truy cập tại [http://localhost:3001](http://localhost:3001)
 
 ---
 
@@ -222,14 +296,13 @@ pnpm --filter @basement/web dev
 | Lệnh | Mục đích |
 | :--- | :--- |
 | `pnpm install` | Cài đặt toàn bộ dependencies trong monorepo |
-| `pnpm dev` | Khởi chạy toàn bộ apps ở chế độ phát triển |
+| `pnpm dev` | Khởi chạy toàn bộ apps song song ở chế độ phát triển |
 | `pnpm --filter @basement/web dev` | Chỉ chạy riêng ứng dụng Next.js frontend |
 | `pnpm --filter @basement/api dev` | Chỉ chạy riêng ứng dụng NestJS backend |
 | `pnpm build` | Build tất cả ứng dụng & packages |
 | `pnpm --filter @basement/web build` | Build riêng frontend Next.js |
 | `pnpm --filter @basement/api build` | Build riêng backend NestJS |
-| `pnpm lint` | Chạy kiểm tra cú pháp ESLint trên toàn bộ monorepo |
-| `pnpm format` | Định dạng code bằng Prettier |
+| `pnpm lint` | Chạy kiểm tra cú pháp ESLint/oxlint trên toàn workspace |
 | `pnpm test` | Chạy unit tests |
 | `pnpm --filter @basement/api prisma migrate dev` | Tạo và áp dụng Prisma migration mới |
 | `pnpm --filter @basement/api prisma generate` | Cập nhật Prisma Client sau khi sửa schema |

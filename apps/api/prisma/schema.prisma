@@ -1,0 +1,19 @@
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+model BranchSample {
+  id         String   @id @default(uuid())
+  branchCode String   @map("branch_code")
+  title      String
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@map("branch_samples")
+}

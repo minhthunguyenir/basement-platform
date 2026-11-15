@@ -4,6 +4,20 @@ Dự án nền tảng **Basement Platform** được xây dựng theo kiến tr�
 
 ---
 
+## 🌐 Môi trường thử nghiệm (Staging Environments)
+
+Bảng tổng hợp 3 tầng hạ tầng đã triển khai trên môi trường thử nghiệm:
+
+| Tầng hạ tầng (Layer) | Nền tảng triển khai | Đường dẫn truy cập (URL) | Chức năng & Kiểm thử |
+| :--- | :--- | :--- | :--- |
+| **Frontend Web** | Vercel | [https://basement-platform.vercel.app](https://basement-platform.vercel.app) | Giao diện web ứng dụng Next.js |
+| **Backend API & Swagger Docs** | Render | [https://basement-platform.onrender.com/api/docs](https://basement-platform.onrender.com/api/docs) | Tài liệu API tương tác và kiểm thử Swagger UI |
+| **Database Health & RLS Verification** | Neon PostgreSQL + Render | [https://basement-platform.onrender.com/health/rls-test](https://basement-platform.onrender.com/health/rls-test) | Kiểm tra kết nối cơ sở dữ liệu và xác thực tính toàn vẹn Row-Level Security (RLS) |
+
+> ⚠️ **Lưu ý vận hành (Render Free Tier):** Máy chủ Backend API được triển khai trên gói Render Free, do đó server sẽ tự chuyển sang trạng thái nghỉ sau 15 phút không có truy cập và mất khoảng **30–50 giây** để khởi động lại ở lượt gọi đầu tiên.
+
+---
+
 ## 📑 Mục lục
 1. [Tech Stack](#-tech-stack)
 2. [Cấu trúc Thư mục Dự án](#-cấu-trúc-thư-mục-dự-án)

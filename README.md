@@ -35,6 +35,7 @@ Bảng tổng hợp 3 tầng hạ tầng đã triển khai trên môi trường 
     - [Quy chuẩn Commit (Conventional Commits)](#quy-chuẩn-commit-conventional-commits)
     - [Quy trình Làm việc Chi tiết](#quy-trình-làm-việc-chi-tiết)
     - [Tiêu chuẩn & Checklist Tạo Pull Request](#tiêu-chuẩn--checklist-tạo-pull-request)
+7. [Quy ước Phát triển Monorepo (Development Guidelines)](#-quy-ước-phát-triển-monorepo-development-guidelines)
 
 ---
 
@@ -398,3 +399,25 @@ Mỗi Pull Request cần cung cấp thông tin rõ ràng và vượt qua các ti
 - [ ] **Biến môi trường:** Nếu có thêm biến môi trường mới, đã bổ sung vào `.env.example`.
 - [ ] **Code Review:** Đã được ít nhất 01 thành viên khác review và phê duyệt (Approve) trước khi merge.
 - [ ] **Merge Strategy:** Ưu tiên chọn **Squash and Merge** (hoặc **Rebase and Merge**) để giữ lịch sử commit trên nhánh chính gọn gàng.
+
+---
+
+## 📌 Quy ước Phát triển Monorepo (Development Guidelines)
+
+- **Quản lý thư viện (`pnpm`):**
+  - Luôn chạy lệnh cài đặt package từ thư mục gốc của monorepo kết hợp cờ `--filter` (ví dụ: `pnpm --filter @basement/api add <pkg>`).
+  - Tuyệt đối không chạy `npm install` hay `yarn` bên trong `apps/api` hoặc `apps/web` để tránh sinh file lock thừa (`package-lock.json`, `yarn.lock`).
+  - Nếu xảy ra xung đột (conflict) file `pnpm-lock.yaml`, ưu tiên giữ nguyên bản của nhánh `main` và chạy lại `pnpm install` ở thư mục gốc để tự động cập nhật lockfile hợp lệ.
+
+- **Ranh giới Backend & Frontend:**
+  - Tách riêng biệt biến môi trường: `apps/api/.env` dành riêng cho các khóa bảo mật, credentials database, redis; `apps/web/.env.local` chỉ chứa các biến có tiền tố `NEXT_PUBLIC_` được phép phơi bày cho trình duyệt.
+  - Không import trực tiếp Prisma Client, ORM models hay các module Node.js chuyên biệt từ `apps/api` sang `apps/web`. Chia sẻ DTOs, interfaces và tiện ích chung thông qua package `packages/shared` (`@basement/shared`).
+
+- **Quy ước Git & Commit:**
+  - Đặt tiền tố commit rõ ràng theo phạm vi tác động cụ thể (ví dụ: `feat(api):`, `feat(web):`, `fix(db):`, `docs:`).
+  - Hạn chế chỉnh sửa đồng thời các file cấu hình tại thư mục gốc (`package.json`, `pnpm-lock.yaml`, `.github/workflows/ci.yml`) trên nhiều nhánh cùng một lúc nhằm hạn chế xung đột merge.
+
+- **Cơ chế Tự động Triển khai (Auto-Deploy):**
+  - Mọi Pull Request khi được hợp nhất (merge) vào nhánh `main` đều tự động kích hoạt GitHub Actions CI để kiểm tra `lint` và `build`.
+  - Sau khi CI hoàn tất thành công, webhook tự động triển khai phiên bản mới nhất lên đồng thời cả **Render** (Backend API & Swagger Docs) và **Vercel** (Frontend Web).
+

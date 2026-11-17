@@ -36,6 +36,8 @@ Bảng tổng hợp 3 tầng hạ tầng đã triển khai trên môi trường 
     - [Quy trình Làm việc Chi tiết](#quy-trình-làm-việc-chi-tiết)
     - [Tiêu chuẩn & Checklist Tạo Pull Request](#tiêu-chuẩn--checklist-tạo-pull-request)
 7. [Quy ước Phát triển Monorepo (Development Guidelines)](#-quy-ước-phát-triển-monorepo-development-guidelines)
+8. [UI Design System & Quy chuẩn Frontend (`apps/web`)](#-ui-design-system--quy-chuẩn-frontend-appsweb)
+9. [Tiến độ Triển khai (Roadmap)](#-tiến-độ-triển-khai-roadmap)
 
 ---
 
@@ -420,4 +422,56 @@ Mỗi Pull Request cần cung cấp thông tin rõ ràng và vượt qua các ti
 - **Cơ chế Tự động Triển khai (Auto-Deploy):**
   - Mọi Pull Request khi được hợp nhất (merge) vào nhánh `main` đều tự động kích hoạt GitHub Actions CI để kiểm tra `lint` và `build`.
   - Sau khi CI hoàn tất thành công, webhook tự động triển khai phiên bản mới nhất lên đồng thời cả **Render** (Backend API & Swagger Docs) và **Vercel** (Frontend Web).
+
+---
+
+## 🎨 UI Design System & Quy chuẩn Frontend (`apps/web`)
+
+Giao diện ứng dụng người dùng (`apps/web`) được thiết kế đồng bộ theo phong cách bản vẽ kỹ thuật kết hợp thẻ thư mục, đảm bảo tính thẩm mỹ, nhất quán và độ phản hồi cao trên mọi thiết bị:
+
+- **Phong cách Thiết kế (Design Concept):**
+  - **Light Mode — Architectural Blueprint & Folder Tabs:** Tái hiện không gian làm việc kiến trúc với hệ lưới kỹ thuật nền (`.bg-blueprint-grid`), khung phân khu sắc nét và hệ thống tab dạng bìa hồ sơ (`Folder Tabs`).
+  - **Khả năng đáp ứng (Responsive Design):** Tối ưu hóa trải nghiệm trên 3 kích thước chuẩn: Desktop (`1440px`, khung `max-w-7xl`), Tablet (`768px`) và Mobile (`375px`). Trên thiết bị di động, bảng dữ liệu tự động chuyển đổi linh hoạt thành dạng thẻ danh sách xếp dọc.
+
+- **Bảng màu Chuẩn (Color Palette):**
+  - **Blueprint (`#F4F4F3`):** Màu nền lưới kỹ thuật chính (`--bg-blueprint`).
+  - **Concrete (`#ECECEB`):** Màu bề mặt thẻ, khung hiển thị và ô ghế mặc định (`--surface-concrete`).
+  - **Hairline (`#D4D4D2`):** Đường viền phân cách siêu mảnh (`--border-hairline`).
+  - **Ink (`#141414`):** Màu chữ chính, tiêu đề phân khu và nút hành động chính CTA (`--ink-primary`).
+  - **Signal Orange (`#DF3B1E`):** Màu điểm nhấn tương tác, trạng thái tab đang chọn và ghế đang thao tác (`--accent-orange`).
+  - *Màu trạng thái phụ trợ:* Xanh lá (`#15803D`) cho ghế trống (`AVAILABLE`), Xám (`#858582`) cho ghế đã có người đặt (`OCCUPIED`).
+
+- **Quy chuẩn Typography:**
+  - **`Plus Jakarta Sans`:** Phông chữ chính cho toàn bộ giao diện, tiêu đề phân khu, thanh điều hướng và văn bản mô tả.
+  - **`JetBrains Mono` (`font-mono`):** Bắt buộc dùng cho toàn bộ dữ liệu mang tính kỹ thuật: chỉ mục phân khu (`/ 01`, `/ 02`), mã chi nhánh (`[01 HCM]`, `[02 DAD]`, `[03 VCA]`), mã ghế (`A01`), khung giờ (`18:00 - 21:00`), tỷ lệ tương đồng vector AI (`98%`) và mã kệ sách (`Kệ A1-12`).
+
+- **Công nghệ & Quy chuẩn Kỹ thuật:**
+  - **Công nghệ cốt lõi:** `Next.js` (App Router), `Tailwind CSS`, `shadcn/ui` (Radix UI), `lucide-react` (iconography), `TanStack Query` (quản lý server state).
+  - **Ngữ cảnh Đa chi nhánh (RLS):** Đồng bộ mã chi nhánh qua URL (`?branch=HCM`) và tự động gắn header `x-branch-code` trong mọi request API để kích hoạt PostgreSQL Row-Level Security.
+  - **Xử lý Trạng thái Mạng:** Tích hợp sẵn `Skeleton` mô phỏng đúng khung hình để xử lý độ trễ khởi động lại (cold start 30–50s) của gói Render Free; xử lý độc lập mã lỗi `409 Conflict` khi xảy ra tranh chấp đặt chỗ đồng thời.
+  - 📖 **Quy tắc chi tiết:** Tham khảo hướng dẫn phát triển toàn diện tại [FRONTEND_RULES.md](./apps/web/FRONTEND_RULES.md).
+
+---
+
+## 🗺️ Tiến độ Triển khai (Roadmap)
+
+Kế hoạch phát triển nền tảng **Basement Platform** theo các giai đoạn (Sprints):
+
+### Sprint 1: Khởi tạo Nền tảng & Hạ tầng Cơ sở (Hoàn thành)
+- [x] Thiết lập kiến trúc Monorepo với `pnpm workspaces` (Next.js 15, NestJS, Prisma ORM, Redis, PostgreSQL).
+- [x] Cấu hình môi trường phát triển cục bộ hoàn chỉnh với Docker Compose (`postgres`, `redis`, `api`, `web`).
+- [x] Kích hoạt extension `pgvector` và xây dựng cơ chế phân quyền cô lập dữ liệu đa chi nhánh với PostgreSQL Row-Level Security (RLS).
+- [x] Xây dựng endpoint kiểm tra sức khỏe và xác thực RLS tự động (`/health/rls-test`).
+- [x] Tích hợp tài liệu API Swagger UI tương tác trực tiếp (`/api/docs`).
+- [x] Thiết lập GitHub Actions CI pipeline kiểm tra cú pháp và build tự động cho toàn bộ workspace.
+- [x] Triển khai thành công môi trường thử nghiệm (Staging) trên Vercel (Web), Render (API) và Neon (PostgreSQL).
+- [x] Nghiên cứu, thống nhất và chốt **UI Design System** chuẩn (Architectural Blueprint & Folder Tabs) cùng bộ quy tắc [FRONTEND_RULES.md](./apps/web/FRONTEND_RULES.md).
+
+### Sprint 2: Giao diện Người dùng & Nghiệp vụ Đặt chỗ Đa Chi nhánh (Đang triển khai)
+- [ ] Xây dựng khung điều hướng và layout chuẩn (`TopNavbar`, `BranchFolderTabs`, `AdminSidebar`) bám sát UI Design System.
+- [ ] Phát triển sơ đồ trực quan mạng lưới ghế ngồi (`SeatMapGrid`, `SeatItem`) theo từng chi nhánh (`HCM`, `DAD`, `VCA`).
+- [ ] Tích hợp TanStack Query và kết nối API lấy dữ liệu trạng thái chỗ ngồi thời gian thực theo ngữ cảnh chi nhánh (`x-branch-code`).
+- [ ] Xử lý nghiệp vụ đặt chỗ và cơ chế giải quyết xung đột/tranh chấp ghế đồng thời (`409 Conflict`) kèm thông báo tức thì.
+- [ ] Tối ưu hóa hiển thị giao diện đa thiết bị (Desktop `1440px`, Tablet `768px`, Mobile `375px`).
+
 

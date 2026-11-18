@@ -286,6 +286,10 @@ pnpm --filter @basement/api prisma migrate deploy
 # Đặt mật khẩu cho role ứng dụng (một lần, khớp với DATABASE_URL)
 docker exec -i basement_postgres psql -U postgres -d basement_db -c "ALTER ROLE basement_app PASSWORD 'basement_app_local';"
 
+# Nạp dữ liệu mẫu (1 tổ chức, 3 chi nhánh HCM/DAD/VCA, nhân viên, khách, bảng giá, sách, 3 phiên đang mở).
+# Chạy lại được nhiều lần; chỉ dùng cho dev/staging. Tổ chức mẫu: DEFAULT_ORGANIZATION_ID=00000000-0000-4000-a000-000000000001
+pnpm --filter @basement/api db:seed
+
 # (Tùy chọn) Mở giao diện Prisma Studio để kiểm tra dữ liệu
 pnpm --filter @basement/api prisma studio
 ```

@@ -1,0 +1,1058 @@
+// Basement – lược đồ cơ sở dữ liệu (PostgreSQL 16 + pgvector)
+// 25 bảng · tạo từ một nguồn đặc tả duy nhất, đã chạy thử trên PostgreSQL 16
+
+Project basement {
+  database_type: 'PostgreSQL'
+  Note: '''
+Quy ước chung
+- Khóa chính: id uuid DEFAULT gen_random_uuid(). Tên bảng và cột snake_case, tên bảng số nhiều.
+- Mọi bảng có created_at; mọi bảng có updated_at (trigger set_updated_at) trừ 3 bảng chỉ ghi thêm:
+  seat_session_segments, book_search_logs, announcement_reads.
+- organization_id NOT NULL và có FK trực tiếp tới organizations ở mọi bảng trừ organizations.
+- Mọi khóa ngoại đi kèm organization_id hoặc branch_id (khóa ngoại kép) để bản ghi cha luôn
+  cùng tổ chức, cùng chi nhánh với bản ghi con.
+- Bảng danh mục, cấu hình: xóa mềm bằng deleted_at. Bảng giao dịch: cột trạng thái kèm lý do hủy.
+- Tiền: bigint, đơn vị đồng.
+- Chỉ mục một phần (WHERE …) và exclusion constraint không biểu diễn được bằng DBML:
+  ghi trong Note của từng bảng, sẽ viết bằng SQL migration.
+- Cần extension: btree_gist (exclusion constraint), vector (pgvector). PostgreSQL 15+ cho NULLS NOT DISTINCT.
+  '''
+}
+
+// ================================================================ ENUMS
+Enum user_role {
+  owner
+  branch_manager
+  staff
+  customer
+}
+
+Enum seating_type {
+  laptop
+  no_laptop
+}
+
+Enum session_status {
+  active
+  closed
+  void
+}
+
+Enum close_type {
+  normal
+  manual
+}
+
+Enum membership_status {
+  pending
+  active
+  cancelled
+}
+
+Enum product_category {
+  drink
+  food
+}
+
+Enum order_status {
+  open
+  confirmed
+  cancelled
+}
+
+Enum order_item_status {
+  active
+  void
+}
+
+Enum invoice_status {
+  unpaid
+  paid
+  cancelled
+}
+
+Enum payment_method {
+  cash
+  bank_transfer
+}
+
+Enum payment_status {
+  pending
+  confirmed
+  cancelled
+}
+
+Enum copy_status {
+  available
+  on_loan
+  lost
+  damaged
+}
+
+Enum loan_type {
+  in_place
+  take_home
+}
+
+Enum loan_status {
+  active
+  returned
+  lost
+  cancelled
+}
+
+Enum deposit_status {
+  held
+  refunded
+  forfeited
+}
+
+Enum search_mode {
+  fts
+  vector
+  hybrid
+}
+
+Enum announcement_audience {
+  customers
+  staff
+  all
+}
+
+Enum idea_status {
+  pending
+  reviewing
+  resolved
+  rejected
+}
+
+// ================================================================ A. NỀN TẢNG VÀ PHÂN QUYỀN
+
+Table organizations [headercolor: #6B7280] {
+  id                  uuid         [pk, default: `gen_random_uuid()`]
+  name                varchar(200) [not null]
+  slug                varchar(50)  [not null, note: 'định danh tổ chức khi đăng nhập (vd. tên miền phụ)']
+  bank_bin            varchar(10)  [note: 'mã BIN ngân hàng nhận tiền, dùng tạo VietQR; NULL = chỉ nhận tiền mặt']
+  bank_account_number varchar(30)
+  bank_account_name   varchar(100)
+  created_at          timestamptz  [not null, default: `now()`]
+  updated_at          timestamptz  [not null, default: `now()`]
+  deleted_at          timestamptz  [note: 'xóa mềm']
+
+  checks {
+    `num_nonnulls(bank_bin, bank_account_number, bank_account_name) IN (0, 3)` [name: 'chk_organizations_bank']
+  }
+
+  Note: '''
+Tổ chức (tenant) và tài khoản nhận tiền chung cho VietQR. Hiện vận hành 1 tổ chức, sẵn sàng cho SaaS.
+Phạm vi: không có branch_id (cấp tổ chức).
+Ràng buộc và chỉ mục viết bằng SQL:
+- uq_organizations_slug: slug duy nhất trong các tổ chức chưa xóa
+  '''
+}
+
+Table branches [headercolor: #6B7280] {
+  id                     uuid         [pk, default: `gen_random_uuid()`]
+  organization_id        uuid         [not null]
+  code                   varchar(20)  [not null, note: 'mã ngắn, vd. HCM01']
+  name                   varchar(200) [not null]
+  address                text
+  timezone               varchar(64)  [not null, default: 'Asia/Ho_Chi_Minh', note: 'dùng để xác định ngày trong tuần khi tính tiền']
+  capacity               integer      [not null, note: 'sức chứa; chỗ trống = capacity − số phiên active (không lưu cột)']
+  opening_hours          jsonb        [note: 'NULL = mở cửa 24/24']
+  late_fee_per_day       bigint       [not null, default: 0, note: 'phí trễ hạn mỗi ngày (đồng)']
+  default_deposit_amount bigint       [not null, default: 0, note: 'tiền cọc mặc định khi mượn về (đồng)']
+  created_at             timestamptz  [not null, default: `now()`]
+  updated_at             timestamptz  [not null, default: `now()`]
+  deleted_at             timestamptz  [note: 'xóa mềm']
+
+  indexes {
+    (id, organization_id) [unique, name: 'uq_branches_id_org']
+  }
+
+  checks {
+    `capacity > 0` [name: 'chk_branches_capacity']
+    `late_fee_per_day >= 0 AND default_deposit_amount >= 0` [name: 'chk_branches_money']
+  }
+
+  Note: '''
+Chi nhánh: sức chứa, múi giờ, giờ mở cửa, phí trễ/ngày, cọc mặc định.
+Phạm vi: không có branch_id (cấp tổ chức).
+Ràng buộc và chỉ mục viết bằng SQL:
+- uq_branches_code: mã chi nhánh duy nhất trong tổ chức (chi nhánh chưa xóa)
+  '''
+}
+
+Table users [headercolor: #6B7280] {
+  id              uuid         [pk, default: `gen_random_uuid()`]
+  organization_id uuid         [not null]
+  full_name       varchar(200)
+  phone           varchar(20)
+  email           varchar(255)
+  password_hash   text         [note: 'NULL với khách vãng lai; app role không được SELECT cột này']
+  member_code     varchar(32)  [not null, note: 'mã thành viên trong QR cá nhân; chuỗi ngẫu nhiên, cấp lại được']
+  is_guest        boolean      [not null, default: false, note: 'true = khách vãng lai do nhân viên tạo, không đăng nhập được']
+  created_at      timestamptz  [not null, default: `now()`]
+  updated_at      timestamptz  [not null, default: `now()`]
+  deleted_at      timestamptz  [note: 'xóa mềm']
+
+  indexes {
+    (id, organization_id) [unique, name: 'uq_users_id_org']
+  }
+
+  checks {
+    `NOT is_guest OR (password_hash IS NULL AND (phone IS NOT NULL OR full_name IS NOT NULL))` [name: 'chk_users_guest']
+    `is_guest OR (full_name IS NOT NULL AND password_hash IS NOT NULL AND (email IS NOT NULL OR phone IS NOT NULL))` [name: 'chk_users_account']
+  }
+
+  Note: '''
+Mọi người dùng của tổ chức, gồm khách có tài khoản và khách vãng lai.
+Phạm vi: không có branch_id (cấp tổ chức).
+Ràng buộc và chỉ mục viết bằng SQL:
+- uq_users_member_code: mã thành viên duy nhất trong tổ chức
+- uq_users_email: email duy nhất trong tổ chức (không phân biệt hoa thường)
+- uq_users_phone: số điện thoại duy nhất trong tổ chức, áp dụng chung cho khách vãng lai và tài khoản thật
+Quy tắc kiểm ở service hoặc trigger, và ghi chú:
+- Khách vãng lai đăng ký bằng đúng số điện thoại đã dùng: cập nhật chính dòng này (gán mật khẩu, is_guest = false).
+  '''
+}
+
+Table user_roles [headercolor: #C99A06] {
+  id              uuid        [pk, default: `gen_random_uuid()`]
+  organization_id uuid        [not null]
+  user_id         uuid        [not null]
+  branch_id       uuid        [note: 'NULL = toàn chuỗi']
+  role            user_role   [not null]
+  created_at      timestamptz [not null, default: `now()`]
+  updated_at      timestamptz [not null, default: `now()`]
+  deleted_at      timestamptz [note: 'xóa mềm = thu hồi vai trò']
+
+  checks {
+    `role NOT IN ('owner', 'customer') OR branch_id IS NULL` [name: 'chk_user_roles_chain_wide']
+  }
+
+  Note: '''
+Vai trò của người dùng theo chi nhánh hoặc toàn chuỗi.
+Phạm vi: branch_id NULL được (NULL = toàn chuỗi).
+Ràng buộc và chỉ mục viết bằng SQL:
+- uq_user_roles: không gán trùng một vai trò ở cùng phạm vi (NULLS NOT DISTINCT, PostgreSQL 15+)
+  '''
+}
+
+// ================================================================ B. SỨC CHỨA VÀ CHECK-IN
+
+Table seat_sessions [headercolor: #1E69C8] {
+  id              uuid           [pk, default: `gen_random_uuid()`]
+  organization_id uuid           [not null]
+  branch_id       uuid           [not null]
+  customer_id     uuid           [not null]
+  seating_type    seating_type   [not null, note: 'nhân viên chọn khi mở phiên']
+  membership_id   uuid           [note: 'gói tháng áp dụng cho phiên (NULL = trả theo giờ)']
+  status          session_status [not null, default: 'active']
+  started_at      timestamptz    [not null, default: `now()`, note: 'đồng hồ máy chủ; ứng dụng không gửi giá trị']
+  ended_at        timestamptz    [note: 'giờ khách thực sự rời đi; dùng để tính tiền']
+  closed_at       timestamptz    [note: 'lúc nhân viên bấm đóng phiên (now() của máy chủ)']
+  close_type      close_type
+  close_reason    text           [note: 'bắt buộc khi đóng thủ công']
+  opened_by       uuid           [not null]
+  closed_by       uuid
+  voided_by       uuid
+  voided_at       timestamptz
+  void_reason     text
+  created_at      timestamptz    [not null, default: `now()`]
+  updated_at      timestamptz    [not null, default: `now()`]
+
+  indexes {
+    (id, branch_id) [unique, name: 'uq_seat_sessions_id_branch']
+  }
+
+  checks {
+    `(status = 'active') = (ended_at IS NULL)` [name: 'chk_seat_sessions_active']
+    `ended_at IS NULL OR ended_at >= started_at` [name: 'chk_seat_sessions_order']
+    `status <> 'closed' OR (closed_at IS NOT NULL AND closed_by IS NOT NULL AND close_type IS NOT NULL AND ended_at <= closed_at)` [name: 'chk_seat_sessions_closed']
+    `close_type IS DISTINCT FROM 'normal' OR ended_at = closed_at` [name: 'chk_seat_sessions_normal_close']
+    `close_type IS DISTINCT FROM 'manual' OR close_reason IS NOT NULL` [name: 'chk_seat_sessions_manual_close']
+    `status <> 'void' OR (voided_by IS NOT NULL AND voided_at IS NOT NULL AND void_reason IS NOT NULL)` [name: 'chk_seat_sessions_void']
+  }
+
+  Note: '''
+Phiên ngồi do nhân viên mở và đóng tại quầy.
+Phạm vi: branch_id NOT NULL.
+Ràng buộc và chỉ mục viết bằng SQL:
+- uq_seat_sessions_one_active: mỗi khách chỉ có một phiên active trong toàn tổ chức
+- ix_seat_sessions_active_branch: đếm số phiên đang mở để tính chỗ trống
+Quy tắc kiểm ở service hoặc trigger, và ghi chú:
+- Void phiên đang mở thì gán ended_at = voided_at để phiên không còn chiếm chỗ.
+- Chỉ được void khi hóa đơn của phiên chưa có thanh toán confirmed (kiểm ở service hoặc trigger).
+- Gói (membership_id) phải còn hiệu lực và cùng seating_type với phiên (kiểm ở service).
+  '''
+}
+
+// ================================================================ C. GIÁ VÀ GÓI
+
+Table time_slots [headercolor: #1E69C8] {
+  id              uuid        [pk, default: `gen_random_uuid()`]
+  organization_id uuid        [not null]
+  branch_id       uuid        [not null]
+  name            varchar(50) [not null, note: 'tên khung, vd. \'Giờ vắng\', \'Giờ đông\'']
+  day_of_week     smallint    [not null, note: '1 = thứ Hai … 7 = Chủ nhật (ISO)']
+  start_time      time        [not null]
+  end_time        time        [not null, note: 'không vắt qua nửa đêm; cho phép \'24:00\'']
+  created_at      timestamptz [not null, default: `now()`]
+  updated_at      timestamptz [not null, default: `now()`]
+  deleted_at      timestamptz [note: 'xóa mềm']
+
+  indexes {
+    (id, branch_id) [unique, name: 'uq_time_slots_id_branch']
+  }
+
+  checks {
+    `day_of_week BETWEEN 1 AND 7` [name: 'chk_time_slots_dow']
+    `end_time > start_time` [name: 'chk_time_slots_range']
+  }
+
+  Note: '''
+Khung giờ riêng của từng chi nhánh, theo ngày trong tuần.
+Phạm vi: branch_id NOT NULL.
+Ràng buộc và chỉ mục viết bằng SQL:
+- ex_time_slots_no_overlap: exclusion constraint: các khung của một chi nhánh không chồng nhau trong cùng ngày (cần btree_gist)
+Quy tắc kiểm ở service hoặc trigger, và ghi chú:
+- Việc phủ kín 24 giờ × 7 ngày do ứng dụng kiểm tra khi lưu bảng giá.
+- Xóa mềm khung giờ thì xóa mềm luôn các price_rules của khung đó.
+  '''
+}
+
+Table price_rules [headercolor: #1E69C8] {
+  id              uuid         [pk, default: `gen_random_uuid()`]
+  organization_id uuid         [not null]
+  branch_id       uuid         [not null, note: 'chép từ time_slots']
+  time_slot_id    uuid         [not null]
+  seating_type    seating_type [not null]
+  price_per_hour  bigint       [not null, note: 'đồng/giờ']
+  created_at      timestamptz  [not null, default: `now()`]
+  updated_at      timestamptz  [not null, default: `now()`]
+  deleted_at      timestamptz  [note: 'xóa mềm']
+
+  checks {
+    `price_per_hour >= 0` [name: 'chk_price_rules_price']
+  }
+
+  Note: '''
+Đơn giá theo giờ cho từng cặp khung giờ × hình thức ngồi.
+Phạm vi: branch_id NOT NULL.
+Ràng buộc và chỉ mục viết bằng SQL:
+- uq_price_rules: mỗi khung có đúng một giá cho mỗi hình thức ngồi
+  '''
+}
+
+Table membership_plans [headercolor: #6B7280] {
+  id              uuid         [pk, default: `gen_random_uuid()`]
+  organization_id uuid         [not null]
+  name            varchar(100) [not null]
+  seating_type    seating_type [not null, note: 'gói áp dụng cho hình thức ngồi này']
+  duration_days   integer      [not null]
+  price           bigint       [not null, note: 'đồng']
+  created_at      timestamptz  [not null, default: `now()`]
+  updated_at      timestamptz  [not null, default: `now()`]
+  deleted_at      timestamptz  [note: 'xóa mềm']
+
+  indexes {
+    (id, organization_id) [unique, name: 'uq_membership_plans_id_org']
+  }
+
+  checks {
+    `duration_days > 0 AND price >= 0` [name: 'chk_membership_plans_values']
+  }
+
+  Note: '''
+Danh mục gói tháng, dùng được ở mọi chi nhánh, không giới hạn giờ.
+Phạm vi: không có branch_id (cấp tổ chức).
+Ràng buộc và chỉ mục viết bằng SQL:
+- uq_membership_plans_name: tên gói duy nhất trong tổ chức
+  '''
+}
+
+Table memberships [headercolor: #6B7280] {
+  id              uuid              [pk, default: `gen_random_uuid()`]
+  organization_id uuid              [not null]
+  customer_id     uuid              [not null]
+  plan_id         uuid              [not null]
+  seating_type    seating_type      [not null, note: 'chụp lại từ gói lúc mua']
+  starts_on       date              [not null]
+  ends_on         date              [not null]
+  status          membership_status [not null, default: 'pending', note: 'pending = chờ hóa đơn paid']
+  cancelled_by    uuid
+  cancel_reason   text
+  created_at      timestamptz       [not null, default: `now()`]
+  updated_at      timestamptz       [not null, default: `now()`]
+
+  indexes {
+    (id, customer_id) [unique, name: 'uq_memberships_id_customer']
+  }
+
+  checks {
+    `ends_on >= starts_on` [name: 'chk_memberships_dates']
+    `status <> 'cancelled' OR (cancelled_by IS NOT NULL AND cancel_reason IS NOT NULL)` [name: 'chk_memberships_cancelled']
+  }
+
+  Note: '''
+Gói khách đã mua; dùng ở mọi chi nhánh. Chi nhánh bán ghi trên hóa đơn.
+Phạm vi: không có branch_id (cấp tổ chức).
+Ràng buộc và chỉ mục viết bằng SQL:
+- ix_memberships_active: tìm gói còn hiệu lực khi mở phiên
+Quy tắc kiểm ở service hoặc trigger, và ghi chú:
+- Hết hạn không lưu thành trạng thái: gói còn hiệu lực khi status = 'active' và ngày hiện tại nằm trong [starts_on, ends_on].
+  '''
+}
+
+Table seat_session_segments [headercolor: #1E69C8] {
+  id                       uuid        [pk, default: `gen_random_uuid()`]
+  organization_id          uuid        [not null]
+  branch_id                uuid        [not null, note: 'chép từ phiên']
+  seat_session_id          uuid        [not null]
+  time_slot_id             uuid        [not null]
+  started_at               timestamptz [not null]
+  ended_at                 timestamptz [not null]
+  price_per_hour           bigint      [not null, note: 'đơn giá chụp lại lúc tính']
+  amount                   bigint      [not null, note: '= price_per_hour × số giây ÷ 3600, làm tròn đến đồng']
+  is_covered_by_membership boolean     [not null, default: false]
+  created_at               timestamptz [not null, default: `now()`]
+
+  checks {
+    `ended_at > started_at` [name: 'chk_segments_range']
+    `price_per_hour >= 0 AND amount >= 0` [name: 'chk_segments_amount']
+    `NOT is_covered_by_membership OR amount = 0` [name: 'chk_segments_covered']
+  }
+
+  Note: '''
+Các đoạn tính tiền của một phiên, tách theo khung giờ và nửa đêm.
+Phạm vi: branch_id NOT NULL.
+Ràng buộc và chỉ mục viết bằng SQL:
+- ex_segments_no_overlap: exclusion constraint: các đoạn của cùng một phiên không chồng nhau
+- ix_segments_time_slot: báo cáo công suất theo khung giờ
+Quy tắc kiểm ở service hoặc trigger, và ghi chú:
+- Chỉ ghi thêm. Tạo khi đóng phiên; nếu phải tính lại khi hóa đơn chưa có thanh toán confirmed thì xóa và ghi lại trong cùng giao dịch.
+  '''
+}
+
+// ================================================================ D. BÁN HÀNG VÀ THANH TOÁN
+
+Table products [headercolor: #6B7280] {
+  id              uuid             [pk, default: `gen_random_uuid()`]
+  organization_id uuid             [not null]
+  name            varchar(200)     [not null]
+  category        product_category [not null]
+  default_price   bigint           [not null, note: 'đồng']
+  created_at      timestamptz      [not null, default: `now()`]
+  updated_at      timestamptz      [not null, default: `now()`]
+  deleted_at      timestamptz      [note: 'xóa mềm']
+
+  indexes {
+    (id, organization_id) [unique, name: 'uq_products_id_org']
+  }
+
+  checks {
+    `default_price >= 0` [name: 'chk_products_price']
+  }
+
+  Note: '''
+Sản phẩm đồ uống, đồ ăn (danh mục chung của tổ chức).
+Phạm vi: không có branch_id (cấp tổ chức).
+Ràng buộc và chỉ mục viết bằng SQL:
+- uq_products_name: tên sản phẩm duy nhất trong tổ chức
+  '''
+}
+
+Table branch_products [headercolor: #1E69C8] {
+  id              uuid        [pk, default: `gen_random_uuid()`]
+  organization_id uuid        [not null]
+  branch_id       uuid        [not null]
+  product_id      uuid        [not null]
+  price           bigint      [note: 'NULL = dùng products.default_price']
+  stock_quantity  integer     [not null, default: 0]
+  created_at      timestamptz [not null, default: `now()`]
+  updated_at      timestamptz [not null, default: `now()`]
+  deleted_at      timestamptz [note: 'xóa mềm = ngừng bán ở chi nhánh']
+
+  checks {
+    `stock_quantity >= 0 AND (price IS NULL OR price >= 0)` [name: 'chk_branch_products_values']
+  }
+
+  Note: '''
+Sản phẩm bán tại chi nhánh: tồn kho và giá riêng.
+Phạm vi: branch_id NOT NULL.
+Ràng buộc và chỉ mục viết bằng SQL:
+- uq_branch_products: mỗi sản phẩm một dòng tồn kho tại mỗi chi nhánh
+Quy tắc kiểm ở service hoặc trigger, và ghi chú:
+- Xác nhận đơn thì trừ stock_quantity, void dòng hoặc hủy đơn thì cộng lại (service, cùng giao dịch).
+  '''
+}
+
+Table orders [headercolor: #1E69C8] {
+  id              uuid         [pk, default: `gen_random_uuid()`]
+  organization_id uuid         [not null]
+  branch_id       uuid         [not null]
+  seat_session_id uuid         [note: 'NULL = đơn lẻ, có hóa đơn riêng']
+  customer_id     uuid         [note: 'NULL = người mua không định danh']
+  status          order_status [not null, default: 'open']
+  created_by      uuid         [not null]
+  cancelled_by    uuid
+  cancel_reason   text
+  created_at      timestamptz  [not null, default: `now()`]
+  updated_at      timestamptz  [not null, default: `now()`]
+
+  indexes {
+    (id, branch_id) [unique, name: 'uq_orders_id_branch']
+  }
+
+  checks {
+    `status <> 'cancelled' OR (cancelled_by IS NOT NULL AND cancel_reason IS NOT NULL)` [name: 'chk_orders_cancelled']
+  }
+
+  Note: '''
+Đơn canteen; gắn vào phiên ngồi hoặc là đơn lẻ.
+Phạm vi: branch_id NOT NULL.
+Ràng buộc và chỉ mục viết bằng SQL:
+- ix_orders_session: gom đơn của một phiên khi lập hóa đơn
+Quy tắc kiểm ở service hoặc trigger, và ghi chú:
+- Đơn gắn phiên thì customer_id trùng khách của phiên (service gán).
+  '''
+}
+
+Table order_items [headercolor: #1E69C8] {
+  id              uuid              [pk, default: `gen_random_uuid()`]
+  organization_id uuid              [not null]
+  branch_id       uuid              [not null, note: 'chép từ đơn']
+  order_id        uuid              [not null]
+  product_id      uuid              [not null]
+  quantity        integer           [not null]
+  unit_price      bigint            [not null, note: 'chụp lại lúc bán']
+  status          order_item_status [not null, default: 'active']
+  voided_by       uuid
+  void_reason     text
+  created_at      timestamptz       [not null, default: `now()`]
+  updated_at      timestamptz       [not null, default: `now()`]
+
+  checks {
+    `quantity > 0 AND unit_price >= 0` [name: 'chk_order_items_values']
+    `status <> 'void' OR (voided_by IS NOT NULL AND void_reason IS NOT NULL)` [name: 'chk_order_items_void']
+  }
+
+  Note: '''
+Chi tiết đơn với đơn giá chụp lại.
+Phạm vi: branch_id NOT NULL.
+Ràng buộc và chỉ mục viết bằng SQL:
+- ix_order_items_order: lấy chi tiết đơn khi tính tổng hóa đơn
+  '''
+}
+
+Table invoices [headercolor: #1E69C8] {
+  id              uuid           [pk, default: `gen_random_uuid()`]
+  organization_id uuid           [not null]
+  branch_id       uuid           [not null, note: 'chi nhánh lập hóa đơn']
+  customer_id     uuid           [note: 'bắt buộc với hóa đơn phiên và hóa đơn gói']
+  seat_session_id uuid
+  membership_id   uuid
+  order_id        uuid           [note: 'chỉ cho đơn lẻ (orders.seat_session_id IS NULL)']
+  code            varchar(30)    [not null, note: 'mã hóa đơn hiển thị']
+  seat_amount     bigint         [not null, default: 0, note: 'tiền ngồi đã làm tròn lên bội số 1.000 đ']
+  order_amount    bigint         [not null, default: 0, note: 'tổng các đơn canteen của phiên, hoặc của đơn lẻ']
+  total_amount    bigint         [not null]
+  status          invoice_status [not null, default: 'unpaid']
+  paid_at         timestamptz
+  created_by      uuid           [not null]
+  cancelled_by    uuid
+  cancel_reason   text
+  created_at      timestamptz    [not null, default: `now()`]
+  updated_at      timestamptz    [not null, default: `now()`]
+
+  indexes {
+    (id, branch_id) [unique, name: 'uq_invoices_id_branch']
+    (organization_id, code) [unique, name: 'uq_invoices_code']
+  }
+
+  checks {
+    `num_nonnulls(seat_session_id, membership_id, order_id) = 1` [name: 'chk_invoices_one_target']
+    `seat_amount >= 0 AND order_amount >= 0 AND total_amount >= 0` [name: 'chk_invoices_amounts']
+    `seat_amount % 1000 = 0` [name: 'chk_invoices_seat_rounding']
+    `seat_session_id IS NOT NULL OR seat_amount = 0` [name: 'chk_invoices_seat_only_session']
+    `membership_id IS NULL OR (seat_amount = 0 AND order_amount = 0)` [name: 'chk_invoices_membership_amounts']
+    `membership_id IS NOT NULL OR total_amount = seat_amount + order_amount` [name: 'chk_invoices_total']
+    `(seat_session_id IS NULL AND membership_id IS NULL) OR customer_id IS NOT NULL` [name: 'chk_invoices_customer']
+    `status <> 'paid' OR paid_at IS NOT NULL` [name: 'chk_invoices_paid']
+    `status <> 'cancelled' OR (cancelled_by IS NOT NULL AND cancel_reason IS NOT NULL)` [name: 'chk_invoices_cancelled']
+  }
+
+  Note: '''
+Hóa đơn cho đúng một trong ba: phiên ngồi, gói tháng, đơn lẻ.
+Phạm vi: branch_id NOT NULL.
+Ràng buộc và chỉ mục viết bằng SQL:
+- uq_invoices_session: mỗi phiên có nhiều nhất một hóa đơn còn hiệu lực
+- uq_invoices_membership: mỗi gói có nhiều nhất một hóa đơn còn hiệu lực
+- uq_invoices_order: mỗi đơn lẻ có nhiều nhất một hóa đơn còn hiệu lực
+- ix_invoices_open: danh sách hóa đơn chưa thanh toán của chi nhánh
+Quy tắc kiểm ở service hoặc trigger, và ghi chú:
+- Mỗi hóa đơn được trả bằng đúng một payment confirmed có amount = total_amount; xác nhận payment thì chuyển hóa đơn sang paid trong cùng giao dịch.
+- Hóa đơn tổng 0 đ được lập thẳng ở trạng thái paid, không có dòng payments.
+- Chỉ hủy được khi không còn payment confirmed.
+  '''
+}
+
+Table payments [headercolor: #1E69C8] {
+  id                 uuid           [pk, default: `gen_random_uuid()`]
+  organization_id    uuid           [not null]
+  branch_id          uuid           [not null, note: 'chép từ hóa đơn']
+  invoice_id         uuid           [not null]
+  method             payment_method [not null]
+  amount             bigint         [not null, note: 'đồng; số tiền ghi vào hóa đơn']
+  status             payment_status [not null, default: 'pending']
+  transfer_reference varchar(30)    [note: 'nội dung chuyển khoản in trong VietQR']
+  created_by         uuid           [not null]
+  confirmed_by       uuid
+  confirmed_at       timestamptz
+  cancelled_by       uuid
+  cancel_reason      text
+  created_at         timestamptz    [not null, default: `now()`]
+  updated_at         timestamptz    [not null, default: `now()`]
+
+  checks {
+    `amount > 0` [name: 'chk_payments_amount']
+    `(method = 'bank_transfer') = (transfer_reference IS NOT NULL)` [name: 'chk_payments_reference']
+    `status <> 'confirmed' OR (confirmed_by IS NOT NULL AND confirmed_at IS NOT NULL)` [name: 'chk_payments_confirmed']
+    `status <> 'cancelled' OR (cancelled_by IS NOT NULL AND cancel_reason IS NOT NULL)` [name: 'chk_payments_cancelled']
+  }
+
+  Note: '''
+Một lần thu tiền mặt hoặc chuyển khoản; nhân viên xác nhận thủ công.
+Phạm vi: branch_id NOT NULL.
+Ràng buộc và chỉ mục viết bằng SQL:
+- uq_payments_reference: nội dung chuyển khoản duy nhất trong tổ chức
+- uq_payments_one_confirmed: mỗi hóa đơn có nhiều nhất một thanh toán confirmed (không trả nhiều lần)
+- ix_payments_invoice: lấy các lần thu của một hóa đơn, kể cả lần đã hủy
+Quy tắc kiểm ở service hoặc trigger, và ghi chú:
+- amount của dòng confirmed phải bằng invoices.total_amount (service kiểm khi xác nhận).
+- Các dòng pending hoặc cancelled có thể nhiều, vd. đã hiện VietQR rồi khách đổi sang tiền mặt.
+  '''
+}
+
+// ================================================================ E. THƯ VIỆN
+
+Table books [headercolor: #6B7280] {
+  id              uuid         [pk, default: `gen_random_uuid()`]
+  organization_id uuid         [not null]
+  title           varchar(500) [not null]
+  authors         text         [note: 'tên tác giả, cách nhau bởi dấu phẩy']
+  isbn            varchar(20)
+  language        varchar(10)  [not null, note: 'mã ngôn ngữ, vd. \'vi\', \'en\'']
+  description     text         [note: 'nguồn văn bản chính để tạo embedding']
+  categories      text[]       [not null, default: '{}']
+  search_vector   tsvector     [note: 'cột sinh (GENERATED ALWAYS … STORED) từ title, authors, description cho tìm toàn văn']
+  created_at      timestamptz  [not null, default: `now()`]
+  updated_at      timestamptz  [not null, default: `now()`]
+  deleted_at      timestamptz  [note: 'xóa mềm']
+
+  indexes {
+    (id, organization_id) [unique, name: 'uq_books_id_org']
+  }
+
+  Note: '''
+Đầu sách (danh mục chung của tổ chức).
+Phạm vi: không có branch_id (cấp tổ chức).
+Ràng buộc và chỉ mục viết bằng SQL:
+- uq_books_isbn: ISBN duy nhất trong tổ chức
+- ix_books_search: GIN index cho tìm toàn văn
+  '''
+}
+
+Table book_copies [headercolor: #1E69C8] {
+  id              uuid        [pk, default: `gen_random_uuid()`]
+  organization_id uuid        [not null]
+  branch_id       uuid        [not null]
+  book_id         uuid        [not null]
+  barcode         varchar(50) [not null]
+  status          copy_status [not null, default: 'available', note: 'service cập nhật khi mượn, trả, mất']
+  created_at      timestamptz [not null, default: `now()`]
+  updated_at      timestamptz [not null, default: `now()`]
+  deleted_at      timestamptz [note: 'xóa mềm = thanh lý']
+
+  indexes {
+    (id, branch_id) [unique, name: 'uq_book_copies_id_branch']
+  }
+
+  Note: '''
+Bản sao vật lý của một đầu sách, đặt tại một chi nhánh.
+Phạm vi: branch_id NOT NULL.
+Ràng buộc và chỉ mục viết bằng SQL:
+- uq_book_copies_barcode: mã vạch duy nhất trong tổ chức
+- ix_book_copies_available: lọc sách còn tại chi nhánh khi tìm kiếm
+  '''
+}
+
+Table book_loans [headercolor: #1E69C8] {
+  id              uuid           [pk, default: `gen_random_uuid()`]
+  organization_id uuid           [not null]
+  branch_id       uuid           [not null]
+  book_copy_id    uuid           [not null]
+  customer_id     uuid           [not null]
+  loan_type       loan_type      [not null]
+  seat_session_id uuid           [note: 'bắt buộc khi đọc tại chỗ, NULL khi mượn về']
+  status          loan_status    [not null, default: 'active']
+  loaned_at       timestamptz    [not null, default: `now()`]
+  due_at          timestamptz    [not null]
+  returned_at     timestamptz
+  issued_by       uuid           [not null, note: 'người giao sách, đồng thời nhận cọc']
+  received_by     uuid           [note: 'người nhận lại sách, đồng thời hoàn cọc']
+  deposit_amount  bigint         [not null, default: 0]
+  deposit_method  payment_method
+  deposit_status  deposit_status [note: 'NULL khi không có cọc']
+  late_fee_amount bigint         [not null, default: 0, note: 'trừ vào cọc; tiền hoàn = deposit_amount − late_fee_amount']
+  cancel_reason   text
+  created_at      timestamptz    [not null, default: `now()`]
+  updated_at      timestamptz    [not null, default: `now()`]
+
+  checks {
+    `due_at > loaned_at` [name: 'chk_book_loans_due']
+    `returned_at IS NULL OR returned_at >= loaned_at` [name: 'chk_book_loans_return_time']
+    `(loan_type = 'in_place') = (seat_session_id IS NOT NULL)` [name: 'chk_book_loans_session']
+    `status <> 'returned' OR (returned_at IS NOT NULL AND received_by IS NOT NULL)` [name: 'chk_book_loans_returned']
+    `status <> 'cancelled' OR cancel_reason IS NOT NULL` [name: 'chk_book_loans_cancelled']
+    `loan_type = 'take_home' OR deposit_amount = 0` [name: 'chk_book_loans_in_place_no_deposit']
+    `(deposit_amount = 0 AND deposit_method IS NULL AND deposit_status IS NULL) OR (deposit_amount > 0 AND deposit_method IS NOT NULL AND deposit_status IS NOT NULL)` [name: 'chk_book_loans_deposit']
+    `late_fee_amount >= 0 AND late_fee_amount <= deposit_amount` [name: 'chk_book_loans_fee']
+  }
+
+  Note: '''
+Phiếu mượn một bản sao; tiền cọc và phí trễ ghi trên phiếu.
+Phạm vi: branch_id NOT NULL.
+Ràng buộc và chỉ mục viết bằng SQL:
+- uq_book_loans_active_copy: mỗi bản sao chỉ có một phiếu đang mượn
+- ix_book_loans_customer: sách khách đang giữ
+Quy tắc kiểm ở service hoặc trigger, và ghi chú:
+- Quá hạn không lưu thành trạng thái: status = 'active' và due_at < now().
+  '''
+}
+
+// ================================================================ F. TÌM KIẾM SÁCH BẰNG AI
+
+Table book_embeddings [headercolor: #6B7280] {
+  id              uuid         [pk, default: `gen_random_uuid()`]
+  organization_id uuid         [not null]
+  book_id         uuid         [not null]
+  model_name      varchar(100) [not null]
+  dimensions      smallint     [not null]
+  embedding       vector       [not null, note: 'pgvector, không cố định số chiều']
+  source_hash     varchar(64)  [not null, note: 'hash văn bản nguồn; khác thì tính lại']
+  created_at      timestamptz  [not null, default: `now()`]
+  updated_at      timestamptz  [not null, default: `now()`]
+
+  indexes {
+    (book_id, model_name) [unique, name: 'uq_book_embeddings_model']
+  }
+
+  checks {
+    `dimensions > 0 AND vector_dims(embedding) = dimensions` [name: 'chk_book_embeddings_dims']
+  }
+
+  Note: '''
+Vector của mỗi đầu sách theo từng mô hình embedding.
+Phạm vi: không có branch_id (cấp tổ chức).
+Quy tắc kiểm ở service hoặc trigger, và ghi chú:
+- Mỗi mô hình một HNSW index một phần, vd. CREATE INDEX … USING hnsw ((embedding::vector(768)) vector_cosine_ops) WHERE model_name = '<tên mô hình>'.
+- Dữ liệu dẫn xuất: tính lại thì ghi đè, không xóa mềm.
+  '''
+}
+
+Table book_search_logs [headercolor: #C99A06] {
+  id              uuid         [pk, default: `gen_random_uuid()`]
+  organization_id uuid         [not null]
+  branch_id       uuid         [note: 'NULL = tìm toàn chuỗi']
+  user_id         uuid         [note: 'NULL = khách chưa đăng nhập']
+  query_text      text         [not null]
+  language        varchar(10)
+  search_mode     search_mode  [not null]
+  model_name      varchar(100) [note: 'NULL khi chỉ tìm toàn văn']
+  results         jsonb        [not null, default: '[]', note: 'top-k: [{book_id, rank, score}]']
+  latency_ms      integer      [not null]
+  created_at      timestamptz  [not null, default: `now()`]
+
+  checks {
+    `(search_mode = 'fts') = (model_name IS NULL)` [name: 'chk_search_logs_model']
+    `latency_ms >= 0` [name: 'chk_search_logs_latency']
+  }
+
+  Note: '''
+Nhật ký truy vấn tìm sách.
+Phạm vi: branch_id NULL được (NULL = toàn chuỗi).
+Ràng buộc và chỉ mục viết bằng SQL:
+- ix_search_logs_time: báo cáo sách được tìm nhiều theo thời gian
+Quy tắc kiểm ở service hoặc trigger, và ghi chú:
+- Chỉ ghi thêm.
+  '''
+}
+
+// ================================================================ H. THÔNG BÁO
+
+Table announcements [headercolor: #C99A06] {
+  id              uuid                  [pk, default: `gen_random_uuid()`]
+  organization_id uuid                  [not null]
+  branch_id       uuid                  [note: 'NULL = toàn chuỗi']
+  audience        announcement_audience [not null]
+  title           varchar(200)          [not null]
+  body            text                  [not null]
+  publish_at      timestamptz           [not null, default: `now()`, note: 'trong tương lai = đã lên lịch']
+  expires_at      timestamptz
+  is_pinned       boolean               [not null, default: false]
+  created_by      uuid                  [not null]
+  created_at      timestamptz           [not null, default: `now()`]
+  updated_at      timestamptz           [not null, default: `now()`]
+  deleted_at      timestamptz           [note: 'xóa mềm']
+
+  indexes {
+    (id, organization_id) [unique, name: 'uq_announcements_id_org']
+  }
+
+  checks {
+    `expires_at IS NULL OR expires_at > publish_at` [name: 'chk_announcements_expiry']
+  }
+
+  Note: '''
+Thông báo theo đối tượng và phạm vi; lên lịch và ghim.
+Phạm vi: branch_id NULL được (NULL = toàn chuỗi).
+Ràng buộc và chỉ mục viết bằng SQL:
+- ix_announcements_feed: thông báo theo phạm vi (branch_id NULL hoặc chi nhánh của người xem) và thời điểm đăng
+  '''
+}
+
+Table announcement_reads [headercolor: #7C4DCC] {
+  id              uuid        [pk, default: `gen_random_uuid()`]
+  organization_id uuid        [not null]
+  announcement_id uuid        [not null]
+  user_id         uuid        [not null]
+  created_at      timestamptz [not null, default: `now()`]
+
+  indexes {
+    (announcement_id, user_id) [unique, name: 'uq_announcement_reads']
+  }
+
+  Note: '''
+Xác nhận đã đọc: mỗi người một dòng cho mỗi thông báo.
+Phạm vi: không có branch_id, kế thừa phạm vi từ bảng cha.
+Quy tắc kiểm ở service hoặc trigger, và ghi chú:
+- Chỉ ghi thêm; created_at là thời điểm đọc.
+  '''
+}
+
+// ================================================================ I. BẢNG Ý TƯỞNG NHÂN VIÊN
+
+Table ideas [headercolor: #C99A06] {
+  id              uuid         [pk, default: `gen_random_uuid()`]
+  organization_id uuid         [not null]
+  branch_id       uuid         [note: 'NULL = toàn chuỗi']
+  author_id       uuid         [not null]
+  title           varchar(200) [not null]
+  body            text         [not null]
+  status          idea_status  [not null, default: 'pending']
+  resolved_by     uuid
+  resolved_at     timestamptz
+  deleted_at      timestamptz  [note: 'xóa mềm bài vi phạm']
+  deleted_by      uuid
+  created_at      timestamptz  [not null, default: `now()`]
+  updated_at      timestamptz  [not null, default: `now()`]
+
+  indexes {
+    (id, organization_id) [unique, name: 'uq_ideas_id_org']
+  }
+
+  checks {
+    `status <> 'resolved' OR (resolved_by IS NOT NULL AND resolved_at IS NOT NULL)` [name: 'chk_ideas_resolved']
+    `status = 'resolved' OR (resolved_by IS NULL AND resolved_at IS NULL)` [name: 'chk_ideas_unresolved']
+    `(deleted_at IS NULL) = (deleted_by IS NULL)` [name: 'chk_ideas_deleted']
+  }
+
+  Note: '''
+Bài ý tưởng của nhân viên; 4 trạng thái; xóa mềm bài vi phạm.
+Phạm vi: branch_id NULL được (NULL = toàn chuỗi).
+Ràng buộc và chỉ mục viết bằng SQL:
+- ix_ideas_list: danh sách bài chưa xóa, lọc theo trạng thái
+  '''
+}
+
+Table idea_comments [headercolor: #7C4DCC] {
+  id              uuid        [pk, default: `gen_random_uuid()`]
+  organization_id uuid        [not null]
+  idea_id         uuid        [not null]
+  author_id       uuid        [not null]
+  body            text        [not null]
+  created_at      timestamptz [not null, default: `now()`]
+  updated_at      timestamptz [not null, default: `now()`]
+  deleted_at      timestamptz [note: 'xóa mềm']
+
+  Note: '''
+Bình luận dưới bài ý tưởng.
+Phạm vi: không có branch_id, kế thừa phạm vi từ bảng cha.
+Ràng buộc và chỉ mục viết bằng SQL:
+- ix_idea_comments_idea: bình luận chưa xóa của một bài
+  '''
+}
+
+// ================================================================ QUAN HỆ
+
+// A. Nền tảng và phân quyền
+Ref fk_branches_organization_id: branches.organization_id > organizations.id
+Ref fk_users_organization_id: users.organization_id > organizations.id
+Ref fk_user_roles_user_id: user_roles.(user_id, organization_id) > users.(id, organization_id)
+Ref fk_user_roles_branch_id: user_roles.(branch_id, organization_id) > branches.(id, organization_id)
+Ref fk_user_roles_organization_id: user_roles.organization_id > organizations.id
+
+// B. Sức chứa và check-in
+Ref fk_seat_sessions_branch_id: seat_sessions.(branch_id, organization_id) > branches.(id, organization_id)
+Ref fk_seat_sessions_customer_id: seat_sessions.(customer_id, organization_id) > users.(id, organization_id)
+Ref fk_seat_sessions_membership_id: seat_sessions.(membership_id, customer_id) > memberships.(id, customer_id)
+Ref fk_seat_sessions_opened_by: seat_sessions.(opened_by, organization_id) > users.(id, organization_id)
+Ref fk_seat_sessions_closed_by: seat_sessions.(closed_by, organization_id) > users.(id, organization_id)
+Ref fk_seat_sessions_voided_by: seat_sessions.(voided_by, organization_id) > users.(id, organization_id)
+Ref fk_seat_sessions_organization_id: seat_sessions.organization_id > organizations.id
+
+// C. Giá và gói
+Ref fk_time_slots_branch_id: time_slots.(branch_id, organization_id) > branches.(id, organization_id)
+Ref fk_time_slots_organization_id: time_slots.organization_id > organizations.id
+Ref fk_price_rules_branch_id: price_rules.(branch_id, organization_id) > branches.(id, organization_id)
+Ref fk_price_rules_time_slot_id: price_rules.(time_slot_id, branch_id) > time_slots.(id, branch_id)
+Ref fk_price_rules_organization_id: price_rules.organization_id > organizations.id
+Ref fk_membership_plans_organization_id: membership_plans.organization_id > organizations.id
+Ref fk_memberships_customer_id: memberships.(customer_id, organization_id) > users.(id, organization_id)
+Ref fk_memberships_plan_id: memberships.(plan_id, organization_id) > membership_plans.(id, organization_id)
+Ref fk_memberships_cancelled_by: memberships.(cancelled_by, organization_id) > users.(id, organization_id)
+Ref fk_memberships_organization_id: memberships.organization_id > organizations.id
+Ref fk_seat_session_segments_branch_id: seat_session_segments.(branch_id, organization_id) > branches.(id, organization_id)
+Ref fk_seat_session_segments_seat_session_id: seat_session_segments.(seat_session_id, branch_id) > seat_sessions.(id, branch_id)
+Ref fk_seat_session_segments_time_slot_id: seat_session_segments.(time_slot_id, branch_id) > time_slots.(id, branch_id)
+Ref fk_seat_session_segments_organization_id: seat_session_segments.organization_id > organizations.id
+
+// D. Bán hàng và thanh toán
+Ref fk_products_organization_id: products.organization_id > organizations.id
+Ref fk_branch_products_branch_id: branch_products.(branch_id, organization_id) > branches.(id, organization_id)
+Ref fk_branch_products_product_id: branch_products.(product_id, organization_id) > products.(id, organization_id)
+Ref fk_branch_products_organization_id: branch_products.organization_id > organizations.id
+Ref fk_orders_branch_id: orders.(branch_id, organization_id) > branches.(id, organization_id)
+Ref fk_orders_seat_session_id: orders.(seat_session_id, branch_id) > seat_sessions.(id, branch_id)
+Ref fk_orders_customer_id: orders.(customer_id, organization_id) > users.(id, organization_id)
+Ref fk_orders_created_by: orders.(created_by, organization_id) > users.(id, organization_id)
+Ref fk_orders_cancelled_by: orders.(cancelled_by, organization_id) > users.(id, organization_id)
+Ref fk_orders_organization_id: orders.organization_id > organizations.id
+Ref fk_order_items_branch_id: order_items.(branch_id, organization_id) > branches.(id, organization_id)
+Ref fk_order_items_order_id: order_items.(order_id, branch_id) > orders.(id, branch_id)
+Ref fk_order_items_product_id: order_items.(product_id, organization_id) > products.(id, organization_id)
+Ref fk_order_items_voided_by: order_items.(voided_by, organization_id) > users.(id, organization_id)
+Ref fk_order_items_organization_id: order_items.organization_id > organizations.id
+Ref fk_invoices_branch_id: invoices.(branch_id, organization_id) > branches.(id, organization_id)
+Ref fk_invoices_customer_id: invoices.(customer_id, organization_id) > users.(id, organization_id)
+Ref fk_invoices_seat_session_id: invoices.(seat_session_id, branch_id) > seat_sessions.(id, branch_id)
+Ref fk_invoices_membership_id: invoices.(membership_id, customer_id) > memberships.(id, customer_id)
+Ref fk_invoices_order_id: invoices.(order_id, branch_id) > orders.(id, branch_id)
+Ref fk_invoices_created_by: invoices.(created_by, organization_id) > users.(id, organization_id)
+Ref fk_invoices_cancelled_by: invoices.(cancelled_by, organization_id) > users.(id, organization_id)
+Ref fk_invoices_organization_id: invoices.organization_id > organizations.id
+Ref fk_payments_branch_id: payments.(branch_id, organization_id) > branches.(id, organization_id)
+Ref fk_payments_invoice_id: payments.(invoice_id, branch_id) > invoices.(id, branch_id)
+Ref fk_payments_created_by: payments.(created_by, organization_id) > users.(id, organization_id)
+Ref fk_payments_confirmed_by: payments.(confirmed_by, organization_id) > users.(id, organization_id)
+Ref fk_payments_cancelled_by: payments.(cancelled_by, organization_id) > users.(id, organization_id)
+Ref fk_payments_organization_id: payments.organization_id > organizations.id
+
+// E. Thư viện
+Ref fk_books_organization_id: books.organization_id > organizations.id
+Ref fk_book_copies_branch_id: book_copies.(branch_id, organization_id) > branches.(id, organization_id)
+Ref fk_book_copies_book_id: book_copies.(book_id, organization_id) > books.(id, organization_id)
+Ref fk_book_copies_organization_id: book_copies.organization_id > organizations.id
+Ref fk_book_loans_branch_id: book_loans.(branch_id, organization_id) > branches.(id, organization_id)
+Ref fk_book_loans_book_copy_id: book_loans.(book_copy_id, branch_id) > book_copies.(id, branch_id)
+Ref fk_book_loans_customer_id: book_loans.(customer_id, organization_id) > users.(id, organization_id)
+Ref fk_book_loans_seat_session_id: book_loans.(seat_session_id, branch_id) > seat_sessions.(id, branch_id)
+Ref fk_book_loans_issued_by: book_loans.(issued_by, organization_id) > users.(id, organization_id)
+Ref fk_book_loans_received_by: book_loans.(received_by, organization_id) > users.(id, organization_id)
+Ref fk_book_loans_organization_id: book_loans.organization_id > organizations.id
+
+// F. Tìm kiếm sách bằng AI
+Ref fk_book_embeddings_book_id: book_embeddings.(book_id, organization_id) > books.(id, organization_id)
+Ref fk_book_embeddings_organization_id: book_embeddings.organization_id > organizations.id
+Ref fk_book_search_logs_organization_id: book_search_logs.organization_id > organizations.id
+Ref fk_book_search_logs_branch_id: book_search_logs.(branch_id, organization_id) > branches.(id, organization_id)
+Ref fk_book_search_logs_user_id: book_search_logs.(user_id, organization_id) > users.(id, organization_id)
+
+// H. Thông báo
+Ref fk_announcements_branch_id: announcements.(branch_id, organization_id) > branches.(id, organization_id)
+Ref fk_announcements_created_by: announcements.(created_by, organization_id) > users.(id, organization_id)
+Ref fk_announcements_organization_id: announcements.organization_id > organizations.id
+Ref fk_announcement_reads_announcement_id: announcement_reads.(announcement_id, organization_id) > announcements.(id, organization_id)
+Ref fk_announcement_reads_user_id: announcement_reads.(user_id, organization_id) > users.(id, organization_id)
+Ref fk_announcement_reads_organization_id: announcement_reads.organization_id > organizations.id
+
+// I. Bảng ý tưởng nhân viên
+Ref fk_ideas_branch_id: ideas.(branch_id, organization_id) > branches.(id, organization_id)
+Ref fk_ideas_author_id: ideas.(author_id, organization_id) > users.(id, organization_id)
+Ref fk_ideas_resolved_by: ideas.(resolved_by, organization_id) > users.(id, organization_id)
+Ref fk_ideas_deleted_by: ideas.(deleted_by, organization_id) > users.(id, organization_id)
+Ref fk_ideas_organization_id: ideas.organization_id > organizations.id
+Ref fk_idea_comments_idea_id: idea_comments.(idea_id, organization_id) > ideas.(id, organization_id)
+Ref fk_idea_comments_author_id: idea_comments.(author_id, organization_id) > users.(id, organization_id)
+Ref fk_idea_comments_organization_id: idea_comments.organization_id > organizations.id
+
+// ================================================================ NHÓM BẢNG
+// A. Nền tảng và phân quyền
+TableGroup A_nen_tang_phan_quyen {
+  organizations
+  branches
+  users
+  user_roles
+}
+
+// B. Sức chứa và check-in
+TableGroup B_suc_chua_check_in {
+  seat_sessions
+}
+
+// C. Giá và gói
+TableGroup C_gia_va_goi {
+  time_slots
+  price_rules
+  membership_plans
+  memberships
+  seat_session_segments
+}
+
+// D. Bán hàng và thanh toán
+TableGroup D_ban_hang_thanh_toan {
+  products
+  branch_products
+  orders
+  order_items
+  invoices
+  payments
+}
+
+// E. Thư viện
+TableGroup E_thu_vien {
+  books
+  book_copies
+  book_loans
+}
+
+// F. Tìm kiếm sách bằng AI
+TableGroup F_tim_kiem_ai {
+  book_embeddings
+  book_search_logs
+}
+
+// H. Thông báo
+TableGroup H_thong_bao {
+  announcements
+  announcement_reads
+}
+
+// I. Bảng ý tưởng nhân viên
+TableGroup I_y_tuong {
+  ideas
+  idea_comments
+}
+

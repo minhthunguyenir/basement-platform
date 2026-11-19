@@ -58,6 +58,6 @@ Cấm tự ý hardcode mã màu hoặc font chữ ngoài bộ chuẩn đã chố
 
 ## 5. TypeScript, Monorepo & Quy ước Git
 - Bật `"strict": true` trong `tsconfig.json`; cấm sử dụng kiểu `any`.
-- Cài thư viện cho FE luôn chạy từ thư mục gốc monorepo: `pnpm --filter web add <tên-gói>`.
+- Cài thư viện cho FE luôn chạy từ thư mục gốc monorepo: `pnpm --filter @basement/web add <tên-gói>`.
 - Tuyệt đối không import code, Prisma Client hay biến môi trường từ `apps/api`. Biến môi trường của FE phải có tiền tố `NEXT_PUBLIC_` và khai báo mẫu trong `apps/web/.env.example`.
 - Đặt tên nhánh và commit theo phạm vi: `feat(web): <mô-tả>`, `fix(web): <mô-tả>`.

@@ -106,7 +106,7 @@ basement-platform/
 
 ## ⚙️ Yêu cầu Hệ thống (Prerequisites)
 
-- **Node.js**: >= `20.x` (LTS khuyến nghị)
+- **Node.js**: `24.x` LTS, tối thiểu `24.9` (khai báo trong `.nvmrc` và `engines`). Jest của API cần bản này để nạp các package ESM-only của NestJS 12.
 - **pnpm**: >= `9.x` (khuyến nghị `pnpm@12.x`)
     - Cài đặt pnpm nếu chưa có: `npm install -g pnpm` hoặc `corepack enable && corepack prepare pnpm@latest --activate`
 - **Docker & Docker Compose**: Để chạy PostgreSQL (pgvector), Redis, API và Web.

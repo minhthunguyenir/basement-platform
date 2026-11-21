@@ -2,14 +2,14 @@
 
 Lược đồ PostgreSQL của Basement, nền tảng quản lý chuỗi không gian tự học kết hợp thư viện. Gồm 25 bảng, phân quyền theo tổ chức và chi nhánh bằng Row-Level Security (RLS), và tìm sách bằng vector (pgvector).
 
-## Thư mục `db/`
+## Thư mục `docs/db/`
 
 | File | Nội dung | Chạy bằng |
 |---|---|---|
 | `01_schema.sql` | Extension, 18 enum, 25 bảng, khóa chính, khóa ngoại, CHECK, index một phần, index thường | `basement_owner` |
 | `02_triggers.sql` | Hàm `set_updated_at()` và 22 trigger tự cập nhật `updated_at` | `basement_owner` |
-| `03_rls.sql` | Vai trò DB, hàm hỗ trợ trong schema `app`, bật RLS cho 25 bảng, 116 policy | superuser |
-| `04_rls_tests.sql` | 50 ca kiểm thử RLS. Tự `ROLLBACK` nên không để lại dữ liệu | superuser |
+| `03_rls.sql` | Vai trò DB, hàm hỗ trợ trong schema `app`, bật RLS cho 25 bảng, 116 policy | superuser, hoặc owner có `CREATEROLE` + `BYPASSRLS` (vd. `neondb_owner` trên Neon) |
+| `04_rls_tests.sql` | 50 ca kiểm thử RLS. Tự `ROLLBACK` nên không để lại dữ liệu | như `03_rls.sql` |
 | `basement.dbml` | Bản thiết kế dạng DBML, mở bằng [dbdiagram.io](https://dbdiagram.io) để xem sơ đồ | — |
 
 **Phải chạy đúng thứ tự 01 → 02 → 03 → 04.** Mỗi file bọc trong `BEGIN … COMMIT`, nên lỗi giữa chừng thì file đó không tạo gì cả.
@@ -19,7 +19,7 @@ Lược đồ PostgreSQL của Basement, nền tảng quản lý chuỗi không 
 - PostgreSQL **16 trở lên**. Thiết kế dùng `NULLS NOT DISTINCT`, cú pháp này có từ bản 15.
 - Extension **pgvector 0.5 trở lên** (cần cho HNSW index) và **btree_gist** (có sẵn trong gói contrib của PostgreSQL).
 - `psql` ở máy chạy lệnh.
-- Một tài khoản **superuser**. Tài khoản này cần để tạo extension và tạo các vai trò `basement_security`, `basement_app`.
+- Một tài khoản **superuser**, hoặc trên dịch vụ cloud không cấp superuser: tài khoản owner có `CREATEROLE` và `BYPASSRLS` và được phép tạo extension. Xem mục [Chạy trên Neon](#chạy-trên-neon-không-có-superuser). Tài khoản này cần để tạo extension và tạo các vai trò `basement_security`, `basement_app`.
 
 Cách nhanh nhất là dùng Docker image `pgvector/pgvector:pg16`, đã có sẵn cả hai extension.
 
@@ -27,13 +27,13 @@ Cách nhanh nhất là dùng Docker image `pgvector/pgvector:pg16`, đã có s�
 
 ### Bước 1. Khởi động PostgreSQL (nếu dùng Docker)
 
-Chạy từ thư mục gốc của repo, thư mục chứa `db/`:
+Chạy từ thư mục gốc của repo, thư mục chứa `docs/`:
 
 ```bash
 docker run -d --name basement-db \
   -e POSTGRES_PASSWORD=postgres \
   -p 5432:5432 \
-  -v "$PWD/db:/sql" \
+  -v "$PWD/docs/db:/sql" \
   pgvector/pgvector:pg16
 ```
 
@@ -43,7 +43,7 @@ Trong container, 4 file SQL nằm ở `/sql`. Các lệnh `psql` bên dưới ch
 alias bpsql='docker exec -i basement-db psql -U postgres -v ON_ERROR_STOP=1'
 ```
 
-Nếu bạn cài PostgreSQL trực tiếp trên máy, thay `bpsql` bằng `psql -U postgres -v ON_ERROR_STOP=1`, và thay đường dẫn `/sql/...` bằng `db/...`.
+Nếu bạn cài PostgreSQL trực tiếp trên máy, thay `bpsql` bằng `psql -U postgres -v ON_ERROR_STOP=1`, và thay đường dẫn `/sql/...` bằng `docs/db/...`.
 
 ### Bước 2. Tạo database, vai trò migration và extension (superuser)
 
@@ -103,6 +103,18 @@ bpsql -c "DROP ROLE IF EXISTS basement_app;" \
 ```
 
 Sau đó làm lại từ Bước 2. Riêng `04_rls_tests.sql` thì chạy lại bao nhiêu lần cũng được, không cần dọn dữ liệu.
+
+## Chạy trên Neon (không có superuser)
+
+Neon không cấp superuser. Owner mặc định (`neondb_owner`) có `CREATEROLE` + `BYPASSRLS` và tạo được extension `vector`, `btree_gist`. Như vậy là đủ: `03_rls.sql` tự chuẩn hóa hai vai trò (kể cả khi đã tồn tại), tự cấp cho owner quyền `SET ROLE` sang chúng, và tạm cấp quyền `CREATE` trên schema `app` để đổi chủ các hàm. Không cần bước chuẩn bị bằng tay.
+
+Trong dự án, lược đồ được áp dụng qua Prisma. Migration `apps/api/prisma/migrations/*_basement_baseline` ghép từ 01 + 02 + 03. Các bước:
+
+1. Neon Console → **Databases → Add database**, owner là `neondb_owner`.
+2. Lấy connection string **direct** (tắt *Connection pooling*) của `neondb_owner` cho `DIRECT_URL`, rồi chạy `pnpm --filter @basement/api prisma migrate deploy`.
+3. SQL Editor: `ALTER ROLE basement_app PASSWORD '<mật khẩu mạnh>';`. Neon đòi mật khẩu có ít nhất 60 bit entropy.
+4. Kiểm thử, dùng `psql` có sẵn trong image Docker: `docker run --rm -i pgvector/pgvector:pg16 psql "$DIRECT_URL" -v ON_ERROR_STOP=1 < docs/db/04_rls_tests.sql`.
+5. Ứng dụng dùng connection string **pooled** với user `basement_app` cho `DATABASE_URL`.
 
 ## Ba vai trò DB
 
@@ -164,7 +176,7 @@ Danh sách đầy đủ 25 bảng và sơ đồ ERD nằm trong hai trang Claude
 | `type "vector" does not exist` hoặc `extension "vector" is not available` | Máy chưa cài pgvector | Dùng image `pgvector/pgvector:pg16`, hoặc cài gói pgvector cho PostgreSQL 16 |
 | `permission denied to create extension` | Tạo extension bằng vai trò không phải superuser | Làm lại Bước 2 bằng `postgres` |
 | `permission denied for schema public` | Thiếu `GRANT CREATE ON SCHEMA public TO basement_owner` | Chạy lại lệnh GRANT ở Bước 2 |
-| `permission denied to create role` hoặc lỗi khi `ALTER FUNCTION … OWNER TO basement_security` | Chạy `03_rls.sql` bằng `basement_owner` | Chạy `03_rls.sql` bằng `postgres` (Bước 4) |
+| `permission denied to create role` hoặc lỗi khi `ALTER FUNCTION … OWNER TO basement_security` | Chạy `03_rls.sql` bằng vai trò thiếu `CREATEROLE` hoặc `BYPASSRLS` (vd. `basement_owner`) | Chạy `03_rls.sql` bằng `postgres` (Bước 4), hoặc bằng owner có `CREATEROLE` + `BYPASSRLS` |
 | `policy "org_isolation" ... already exists` | Chạy `03_rls.sql` lần thứ hai | Làm theo mục [Chạy lại từ đầu](#chạy-lại-từ-đầu) |
 | `04_rls_tests.sql` báo `duplicate key` ngay từ đầu | Database đã có dữ liệu thật trùng mã với dữ liệu mẫu | Chạy kiểm thử trên một database sạch |
 | Ứng dụng không thấy dòng nào | Chưa gán `app.organization_id` trong giao dịch, hoặc người dùng không có vai trò ở chi nhánh đó | Kiểm tra `set_config` ở đầu giao dịch và bảng `user_roles` |
@@ -176,5 +188,5 @@ Danh sách đầy đủ 25 bảng và sơ đồ ERD nằm trong hai trang Claude
   - xác nhận thanh toán thì chuyển hóa đơn sang `paid`;
   - trừ tồn kho khi xác nhận đơn;
   - cập nhật `book_copies.status` khi mượn, trả.
-- 4 file đã được chạy thử trên PostgreSQL 16. Phần pgvector khi thử được thay bằng một kiểu tương đương, nên lần đầu chạy trên máy có pgvector thật, hãy để ý kết quả của `01_schema.sql`.
+- Ngày 21/11/2026, 4 file đã chạy thật với pgvector 0.8.7 trên PostgreSQL 16.16 (superuser) và 18.7 (owner không phải superuser, giống Neon): không lỗi, 50/50 ca đạt.
 - Đổi lược đồ thì sửa file SQL tương ứng, đồng thời sửa `basement.dbml` để hai bản luôn khớp nhau.

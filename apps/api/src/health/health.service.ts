@@ -1,8 +1,21 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+
+/** Số bảng nghiệp vụ trong docs/db/01_schema.sql; tất cả phải bật và ép RLS. */
+const EXPECTED_TABLES = 25;
+
+export interface OccupancyRow {
+  branch_id: string;
+  branch_name: string;
+  capacity: number;
+  active_sessions: number;
+  free_seats: number;
+}
 
 @Injectable()
 export class HealthService {
+  private readonly logger = new Logger(HealthService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   getHealth() {
@@ -14,149 +27,65 @@ export class HealthService {
   }
 
   /**
-   * Kiểm thử kết nối PostgreSQL, pgvector và tính cô lập dữ liệu theo chi nhánh (Row-Level Security - RLS).
-   * Tự động seed 3 bản ghi mẫu nếu bảng đang trống và kiểm tra tính toàn vẹn của chính sách RLS.
+   * Kiểm tra cấu hình Row-Level Security đang chạy (chỉ đọc, không ghi dữ liệu):
+   * - ứng dụng kết nối bằng role basement_app, không phải superuser;
+   * - đủ 25 bảng bật ENABLE + FORCE ROW LEVEL SECURITY;
+   * - không gán ngữ cảnh tổ chức thì không đọc được dòng nào (đóng mặc định);
+   * - nếu có DEFAULT_ORGANIZATION_ID: số chỗ trống từng chi nhánh qua app.branch_occupancy().
+   * Bộ kiểm thử phân quyền đầy đủ là docs/db/04_rls_tests.sql (chạy trong CI).
    */
-  async rlsTest(specificBranch?: string) {
+  async rlsTest() {
     try {
-      // 1. Kiểm tra kết nối và pgvector extension
-      const extensionCheck = await this.prisma.$queryRawUnsafe<Array<{ extname: string; extversion: string }>>(
-        `SELECT extname, extversion FROM pg_extension WHERE extname = 'vector';`,
-      );
-      const hasPgVector = extensionCheck.length > 0;
+      const [identity] = await this.prisma.$queryRaw<Array<{ role: string; is_superuser: string }>>`
+        SELECT current_user AS role, current_setting('is_superuser') AS is_superuser`;
 
-      // 2. Tự động chèn 3 bản ghi mẫu (HCM, DAD, VCA) nếu bảng đang trống hoặc chưa có dữ liệu chi nhánh
-      const sampleBranches = [
-        { code: 'HCM', title: 'Hồ sơ dự án Tòa nhà Bitexco (Chi nhánh TP.HCM)' },
-        { code: 'DAD', title: 'Hồ sơ dự án Cầu Rồng (Chi nhánh Đà Nẵng)' },
-        { code: 'VCA', title: 'Hồ sơ dự án Cầu Cần Thơ (Chi nhánh Cần Thơ)' },
-      ];
+      const extension = await this.prisma.$queryRaw<Array<{ extversion: string }>>`
+        SELECT extversion FROM pg_extension WHERE extname = 'vector'`;
 
-      for (const sample of sampleBranches) {
-        await this.prisma.withBranch(sample.code, async (tx) => {
-          // Query kiểm tra bản ghi theo chi nhánh
-          const existing = await tx.$queryRawUnsafe<Array<{ id: string }>>(
-            `SELECT id FROM "branch_samples" WHERE "branch_code" = $1 LIMIT 1;`,
-            sample.code,
-          );
-          if (existing.length === 0) {
-            await tx.$queryRawUnsafe(
-              `INSERT INTO "branch_samples" ("id", "branch_code", "title", "created_at")
-               VALUES (gen_random_uuid(), $1, $2, NOW());`,
-              sample.code,
-              sample.title,
-            );
-          }
-        });
-      }
+      const [rls] = await this.prisma.$queryRaw<Array<{ tables: number; forced: number }>>`
+        SELECT count(*)::int AS tables,
+               count(*) FILTER (WHERE c.relrowsecurity AND c.relforcerowsecurity)::int AS forced
+        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname <> '_prisma_migrations'`;
 
-      // 3. Nếu người dùng chỉ định query ?branch=...
-      if (specificBranch) {
-        const records = await this.prisma.withBranch(specificBranch, (tx) => {
-          return tx.$queryRawUnsafe<Array<{ id: string; branch_code: string; title: string; created_at: Date }>>(
-            `SELECT id, branch_code, title, created_at FROM "branch_samples";`,
-          );
-        });
+      // Ngoài withContext(): app.organization_id chưa gán nên policy phải chặn hết.
+      const [withoutContext] = await this.prisma.$queryRaw<Array<{ rows: number }>>`
+        SELECT count(*)::int AS rows FROM branches`;
 
-        return {
-          status: 'ok',
-          database: 'connected',
-          pgvector: hasPgVector ? { installed: true, version: extensionCheck[0].extversion } : { installed: false },
-          queryBranch: specificBranch,
-          recordsFound: records.length,
-          records,
-        };
-      }
+      const organizationId = process.env.DEFAULT_ORGANIZATION_ID;
+      const occupancy = organizationId
+        ? await this.prisma.withContext({ organizationId }, (tx) =>
+            tx.$queryRaw<OccupancyRow[]>`SELECT * FROM app.branch_occupancy()`,
+          )
+        : null;
 
-      // 4. Kiểm tra cô lập dữ liệu tự động giữa 3 chi nhánh: HCM, DAD, VCA
-      const [hcmRecords, dadRecords, vcaRecords, unauthorizedRecords] = await Promise.all([
-        this.prisma.withBranch('HCM', (tx) => {
-          return tx.$queryRawUnsafe<Array<{ id: string; branch_code: string; title: string }>>(
-            `SELECT id, branch_code, title FROM "branch_samples";`,
-          );
-        }),
-        this.prisma.withBranch('DAD', (tx) => {
-          return tx.$queryRawUnsafe<Array<{ id: string; branch_code: string; title: string }>>(
-            `SELECT id, branch_code, title FROM "branch_samples";`,
-          );
-        }),
-        this.prisma.withBranch('VCA', (tx) => {
-          return tx.$queryRawUnsafe<Array<{ id: string; branch_code: string; title: string }>>(
-            `SELECT id, branch_code, title FROM "branch_samples";`,
-          );
-        }),
-        // Query dưới role basement_app nhưng KHÔNG set app.current_branch
-        this.prisma.$transaction(async (tx) => {
-          await tx.$executeRawUnsafe(`SET LOCAL ROLE basement_app;`);
-          return tx.$queryRawUnsafe<Array<{ id: string }>>(`SELECT id FROM "branch_samples";`);
-        }),
-      ]);
-
-      // Kiểm tra tính toàn vẹn RLS
-      const isHcmIsolated = hcmRecords.every((r) => r.branch_code === 'HCM') && hcmRecords.length > 0;
-      const isDadIsolated = dadRecords.every((r) => r.branch_code === 'DAD') && dadRecords.length > 0;
-      const isVcaIsolated = vcaRecords.every((r) => r.branch_code === 'VCA') && vcaRecords.length > 0;
-      const isUnauthorizedBlocked = unauthorizedRecords.length === 0;
-
-      const isRlsSuccessful = isHcmIsolated && isDadIsolated && isVcaIsolated && isUnauthorizedBlocked;
+      const checks = {
+        connectedAsAppRole: identity.role === 'basement_app' && identity.is_superuser === 'off',
+        allTablesForceRls: rls.tables === EXPECTED_TABLES && rls.forced === EXPECTED_TABLES,
+        closedWithoutContext: withoutContext.rows === 0,
+      };
+      const success = Object.values(checks).every(Boolean);
 
       return {
         status: 'ok',
         database: 'connected',
-        pgvector: hasPgVector
-          ? { status: 'active', version: extensionCheck[0].extversion }
-          : { status: 'missing' },
+        connectedAs: { role: identity.role, superuser: identity.is_superuser === 'on' },
+        pgvector: extension.length > 0 ? { installed: true, version: extension[0].extversion } : { installed: false },
         rlsVerification: {
-          success: isRlsSuccessful,
-          rulesChecked: [
-            'ENABLE ROW LEVEL SECURITY',
-            'FORCE ROW LEVEL SECURITY',
-            'POLICY USING ("branch_code" = current_setting(\'app.current_branch\', true))',
-            'SET LOCAL ROLE basement_app',
-          ],
-          tests: {
-            HCM: {
-              queriedAs: 'HCM',
-              count: hcmRecords.length,
-              records: hcmRecords,
-              isolatedOnlyToHCM: isHcmIsolated,
-            },
-            DAD: {
-              queriedAs: 'DAD',
-              count: dadRecords.length,
-              records: dadRecords,
-              isolatedOnlyToDAD: isDadIsolated,
-            },
-            VCA: {
-              queriedAs: 'VCA',
-              count: vcaRecords.length,
-              records: vcaRecords,
-              isolatedOnlyToVCA: isVcaIsolated,
-            },
-            withoutBranchContext: {
-              queriedAs: 'none (no app.current_branch set)',
-              count: unauthorizedRecords.length,
-              blocked: isUnauthorizedBlocked,
-            },
-          },
-          summary: isRlsSuccessful
-            ? 'RLS (Row-Level Security) hoạt động chính xác: Mỗi chi nhánh (HCM, DAD, VCA) chỉ truy xuất được đúng dữ liệu của mình. Mọi truy vấn không có ngữ cảnh chi nhánh đều bị chặn hoàn toàn.'
-            : 'Cảnh báo: Kiểm tra RLS phát hiện bất thường trong việc lọc dữ liệu chi nhánh.',
+          success,
+          checks,
+          tables: { expected: EXPECTED_TABLES, found: rls.tables, forceRls: rls.forced },
+          rowsVisibleWithoutContext: withoutContext.rows,
+          summary: success
+            ? 'RLS hoạt động: ứng dụng chạy bằng basement_app, 25/25 bảng ép RLS, không có ngữ cảnh tổ chức thì không đọc được dữ liệu.'
+            : 'Cảnh báo: cấu hình RLS chưa đúng. Kiểm tra DATABASE_URL (phải là basement_app) và migration.',
         },
+        occupancy: occupancy ?? 'Chưa cấu hình DEFAULT_ORGANIZATION_ID',
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error('[HealthService] RLS test failed:', error);
-      return {
-        status: 'error',
-        database: 'error',
-        message: errorMessage,
-        error: errorMessage,
-      };
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`RLS check failed: ${message}`);
+      return { status: 'error', database: 'error', message };
     }
-  }
-
-  async testRowLevelSecurity(specificBranch?: string) {
-    return this.rlsTest(specificBranch);
   }
 }

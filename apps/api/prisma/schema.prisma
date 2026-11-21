@@ -1,19 +1,759 @@
-datasource db {
-  provider   = "postgresql"
-  url        = env("DATABASE_URL")
-  extensions = [vector]
-}
-
 generator client {
   provider        = "prisma-client-js"
   previewFeatures = ["postgresqlExtensions"]
 }
 
-model BranchSample {
-  id         String   @id @default(uuid())
-  branchCode String   @map("branch_code")
-  title      String
-  createdAt  DateTime @default(now()) @map("created_at")
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+  extensions = [vector]
+}
 
-  @@map("branch_samples")
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model announcement_reads {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String        @db.Uuid
+  announcement_id String        @db.Uuid
+  user_id         String        @db.Uuid
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+  announcements   announcements @relation(fields: [announcement_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_announcement_reads_announcement_id")
+  organizations   organizations @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_announcement_reads_organization_id")
+  users           users         @relation(fields: [user_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_announcement_reads_user_id")
+
+  @@unique([announcement_id, user_id], map: "uq_announcement_reads")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model announcements {
+  id                 String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id    String                @db.Uuid
+  branch_id          String?               @db.Uuid
+  audience           announcement_audience
+  title              String                @db.VarChar(200)
+  body               String
+  publish_at         DateTime              @default(now()) @db.Timestamptz(6)
+  expires_at         DateTime?             @db.Timestamptz(6)
+  is_pinned          Boolean               @default(false)
+  created_by         String                @db.Uuid
+  created_at         DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime              @default(now()) @db.Timestamptz(6)
+  deleted_at         DateTime?             @db.Timestamptz(6)
+  announcement_reads announcement_reads[]
+  branches           branches?             @relation(fields: [branch_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_announcements_branch_id")
+  users              users                 @relation(fields: [created_by, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_announcements_created_by")
+  organizations      organizations         @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_announcements_organization_id")
+
+  @@unique([id, organization_id], map: "uq_announcements_id_org")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model book_copies {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String        @db.Uuid
+  branch_id       String        @db.Uuid
+  book_id         String        @db.Uuid
+  barcode         String        @db.VarChar(50)
+  status          copy_status   @default(available)
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime      @default(now()) @db.Timestamptz(6)
+  deleted_at      DateTime?     @db.Timestamptz(6)
+  books           books         @relation(fields: [book_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_book_copies_book_id")
+  branches        branches      @relation(fields: [branch_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_book_copies_branch_id")
+  organizations   organizations @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_book_copies_organization_id")
+  book_loans      book_loans[]
+
+  @@unique([id, branch_id], map: "uq_book_copies_id_branch")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model book_embeddings {
+  id              String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String                @db.Uuid
+  book_id         String                @db.Uuid
+  model_name      String                @db.VarChar(100)
+  dimensions      Int                   @db.SmallInt
+  embedding       Unsupported("vector")
+  source_hash     String                @db.VarChar(64)
+  created_at      DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime              @default(now()) @db.Timestamptz(6)
+  books           books                 @relation(fields: [book_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_book_embeddings_book_id")
+  organizations   organizations         @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_book_embeddings_organization_id")
+
+  @@unique([book_id, model_name], map: "uq_book_embeddings_model")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model book_loans {
+  id                                                  String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                     String          @db.Uuid
+  branch_id                                           String          @db.Uuid
+  book_copy_id                                        String          @db.Uuid
+  customer_id                                         String          @db.Uuid
+  loan_type                                           loan_type
+  seat_session_id                                     String?         @db.Uuid
+  status                                              loan_status     @default(active)
+  loaned_at                                           DateTime        @default(now()) @db.Timestamptz(6)
+  due_at                                              DateTime        @db.Timestamptz(6)
+  returned_at                                         DateTime?       @db.Timestamptz(6)
+  issued_by                                           String          @db.Uuid
+  received_by                                         String?         @db.Uuid
+  deposit_amount                                      BigInt          @default(0)
+  deposit_method                                      payment_method?
+  deposit_status                                      deposit_status?
+  late_fee_amount                                     BigInt          @default(0)
+  cancel_reason                                       String?
+  created_at                                          DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at                                          DateTime        @default(now()) @db.Timestamptz(6)
+  book_copies                                         book_copies     @relation(fields: [book_copy_id, branch_id], references: [id, branch_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_book_loans_book_copy_id")
+  branches                                            branches        @relation(fields: [branch_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_book_loans_branch_id")
+  users_book_loans_customer_id_organization_idTousers users           @relation("book_loans_customer_id_organization_idTousers", fields: [customer_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_book_loans_customer_id")
+  users_book_loans_issued_by_organization_idTousers   users           @relation("book_loans_issued_by_organization_idTousers", fields: [issued_by, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_book_loans_issued_by")
+  organizations                                       organizations   @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_book_loans_organization_id")
+  users_book_loans_received_by_organization_idTousers users?          @relation("book_loans_received_by_organization_idTousers", fields: [received_by, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_book_loans_received_by")
+  seat_sessions                                       seat_sessions?  @relation(fields: [seat_session_id, branch_id], references: [id, branch_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_book_loans_seat_session_id")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model book_search_logs {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String        @db.Uuid
+  branch_id       String?       @db.Uuid
+  user_id         String?       @db.Uuid
+  query_text      String
+  language        String?       @db.VarChar(10)
+  search_mode     search_mode
+  model_name      String?       @db.VarChar(100)
+  results         Json          @default("[]")
+  latency_ms      Int
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+  branches        branches?     @relation(fields: [branch_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_book_search_logs_branch_id")
+  organizations   organizations @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_book_search_logs_organization_id")
+  users           users?        @relation(fields: [user_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_book_search_logs_user_id")
+
+  @@index([organization_id, created_at], map: "ix_search_logs_time")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model books {
+  id              String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String                   @db.Uuid
+  title           String                   @db.VarChar(500)
+  authors         String?
+  isbn            String?                  @db.VarChar(20)
+  language        String                   @db.VarChar(10)
+  description     String?
+  categories      String[]                 @default([])
+  search_vector   Unsupported("tsvector")? @default(dbgenerated("to_tsvector('simple'::regconfig, (((((COALESCE(title, ''::character varying))::text || ' '::text) || COALESCE(authors, ''::text)) || ' '::text) || COALESCE(description, ''::text)))"))
+  created_at      DateTime                 @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime                 @default(now()) @db.Timestamptz(6)
+  deleted_at      DateTime?                @db.Timestamptz(6)
+  book_copies     book_copies[]
+  book_embeddings book_embeddings[]
+  organizations   organizations            @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_books_organization_id")
+
+  @@unique([id, organization_id], map: "uq_books_id_org")
+  @@index([search_vector], map: "ix_books_search", type: Gin)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model branch_products {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String        @db.Uuid
+  branch_id       String        @db.Uuid
+  product_id      String        @db.Uuid
+  price           BigInt?
+  stock_quantity  Int           @default(0)
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime      @default(now()) @db.Timestamptz(6)
+  deleted_at      DateTime?     @db.Timestamptz(6)
+  branches        branches      @relation(fields: [branch_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_branch_products_branch_id")
+  organizations   organizations @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_branch_products_organization_id")
+  products        products      @relation(fields: [product_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_branch_products_product_id")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model branches {
+  id                     String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id        String                  @db.Uuid
+  code                   String                  @db.VarChar(20)
+  name                   String                  @db.VarChar(200)
+  address                String?
+  timezone               String                  @default("Asia/Ho_Chi_Minh") @db.VarChar(64)
+  capacity               Int
+  opening_hours          Json?
+  late_fee_per_day       BigInt                  @default(0)
+  default_deposit_amount BigInt                  @default(0)
+  created_at             DateTime                @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime                @default(now()) @db.Timestamptz(6)
+  deleted_at             DateTime?               @db.Timestamptz(6)
+  announcements          announcements[]
+  book_copies            book_copies[]
+  book_loans             book_loans[]
+  book_search_logs       book_search_logs[]
+  branch_products        branch_products[]
+  organizations          organizations           @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_branches_organization_id")
+  ideas                  ideas[]
+  invoices               invoices[]
+  order_items            order_items[]
+  orders                 orders[]
+  payments               payments[]
+  price_rules            price_rules[]
+  seat_session_segments  seat_session_segments[]
+  seat_sessions          seat_sessions[]
+  time_slots             time_slots[]
+  user_roles             user_roles[]
+
+  @@unique([id, organization_id], map: "uq_branches_id_org")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model idea_comments {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String        @db.Uuid
+  idea_id         String        @db.Uuid
+  author_id       String        @db.Uuid
+  body            String
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime      @default(now()) @db.Timestamptz(6)
+  deleted_at      DateTime?     @db.Timestamptz(6)
+  users           users         @relation(fields: [author_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_idea_comments_author_id")
+  ideas           ideas         @relation(fields: [idea_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_idea_comments_idea_id")
+  organizations   organizations @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_idea_comments_organization_id")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model ideas {
+  id                                             String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                String          @db.Uuid
+  branch_id                                      String?         @db.Uuid
+  author_id                                      String          @db.Uuid
+  title                                          String          @db.VarChar(200)
+  body                                           String
+  status                                         idea_status     @default(pending)
+  resolved_by                                    String?         @db.Uuid
+  resolved_at                                    DateTime?       @db.Timestamptz(6)
+  deleted_at                                     DateTime?       @db.Timestamptz(6)
+  deleted_by                                     String?         @db.Uuid
+  created_at                                     DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at                                     DateTime        @default(now()) @db.Timestamptz(6)
+  idea_comments                                  idea_comments[]
+  users_ideas_author_id_organization_idTousers   users           @relation("ideas_author_id_organization_idTousers", fields: [author_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_ideas_author_id")
+  branches                                       branches?       @relation(fields: [branch_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_ideas_branch_id")
+  users_ideas_deleted_by_organization_idTousers  users?          @relation("ideas_deleted_by_organization_idTousers", fields: [deleted_by, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_ideas_deleted_by")
+  organizations                                  organizations   @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_ideas_organization_id")
+  users_ideas_resolved_by_organization_idTousers users?          @relation("ideas_resolved_by_organization_idTousers", fields: [resolved_by, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_ideas_resolved_by")
+
+  @@unique([id, organization_id], map: "uq_ideas_id_org")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model invoices {
+  id                                                 String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                    String         @db.Uuid
+  branch_id                                          String         @db.Uuid
+  customer_id                                        String?        @db.Uuid
+  seat_session_id                                    String?        @db.Uuid
+  membership_id                                      String?        @db.Uuid
+  order_id                                           String?        @db.Uuid
+  code                                               String         @db.VarChar(30)
+  seat_amount                                        BigInt         @default(0)
+  order_amount                                       BigInt         @default(0)
+  total_amount                                       BigInt
+  status                                             invoice_status @default(unpaid)
+  paid_at                                            DateTime?      @db.Timestamptz(6)
+  created_by                                         String         @db.Uuid
+  cancelled_by                                       String?        @db.Uuid
+  cancel_reason                                      String?
+  created_at                                         DateTime       @default(now()) @db.Timestamptz(6)
+  updated_at                                         DateTime       @default(now()) @db.Timestamptz(6)
+  branches                                           branches       @relation(fields: [branch_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_invoices_branch_id")
+  users_invoices_cancelled_by_organization_idTousers users?         @relation("invoices_cancelled_by_organization_idTousers", fields: [cancelled_by, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_invoices_cancelled_by")
+  users_invoices_created_by_organization_idTousers   users          @relation("invoices_created_by_organization_idTousers", fields: [created_by, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_invoices_created_by")
+  users_invoices_customer_id_organization_idTousers  users?         @relation("invoices_customer_id_organization_idTousers", fields: [customer_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_invoices_customer_id")
+  memberships                                        memberships?   @relation(fields: [membership_id, customer_id], references: [id, customer_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_invoices_membership_id")
+  orders                                             orders?        @relation(fields: [order_id, branch_id], references: [id, branch_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_invoices_order_id")
+  organizations                                      organizations  @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_invoices_organization_id")
+  seat_sessions                                      seat_sessions? @relation(fields: [seat_session_id, branch_id], references: [id, branch_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_invoices_seat_session_id")
+  payments                                           payments[]
+
+  @@unique([organization_id, code], map: "uq_invoices_code")
+  @@unique([id, branch_id], map: "uq_invoices_id_branch")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model membership_plans {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String        @db.Uuid
+  name            String        @db.VarChar(100)
+  seating_type    seating_type
+  duration_days   Int
+  price           BigInt
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime      @default(now()) @db.Timestamptz(6)
+  deleted_at      DateTime?     @db.Timestamptz(6)
+  organizations   organizations @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_membership_plans_organization_id")
+  memberships     memberships[]
+
+  @@unique([id, organization_id], map: "uq_membership_plans_id_org")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model memberships {
+  id                                                    String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                       String            @db.Uuid
+  customer_id                                           String            @db.Uuid
+  plan_id                                               String            @db.Uuid
+  seating_type                                          seating_type
+  starts_on                                             DateTime          @db.Date
+  ends_on                                               DateTime          @db.Date
+  status                                                membership_status @default(pending)
+  cancelled_by                                          String?           @db.Uuid
+  cancel_reason                                         String?
+  created_at                                            DateTime          @default(now()) @db.Timestamptz(6)
+  updated_at                                            DateTime          @default(now()) @db.Timestamptz(6)
+  invoices                                              invoices[]
+  users_memberships_cancelled_by_organization_idTousers users?            @relation("memberships_cancelled_by_organization_idTousers", fields: [cancelled_by, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_memberships_cancelled_by")
+  users_memberships_customer_id_organization_idTousers  users             @relation("memberships_customer_id_organization_idTousers", fields: [customer_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_memberships_customer_id")
+  organizations                                         organizations     @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_memberships_organization_id")
+  membership_plans                                      membership_plans  @relation(fields: [plan_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_memberships_plan_id")
+  seat_sessions                                         seat_sessions[]
+
+  @@unique([id, customer_id], map: "uq_memberships_id_customer")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model order_items {
+  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String            @db.Uuid
+  branch_id       String            @db.Uuid
+  order_id        String            @db.Uuid
+  product_id      String            @db.Uuid
+  quantity        Int
+  unit_price      BigInt
+  status          order_item_status @default(active)
+  voided_by       String?           @db.Uuid
+  void_reason     String?
+  created_at      DateTime          @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime          @default(now()) @db.Timestamptz(6)
+  branches        branches          @relation(fields: [branch_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_order_items_branch_id")
+  orders          orders            @relation(fields: [order_id, branch_id], references: [id, branch_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_order_items_order_id")
+  organizations   organizations     @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_order_items_organization_id")
+  products        products          @relation(fields: [product_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_order_items_product_id")
+  users           users?            @relation(fields: [voided_by, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_order_items_voided_by")
+
+  @@index([order_id], map: "ix_order_items_order")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model orders {
+  id                                               String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                  String         @db.Uuid
+  branch_id                                        String         @db.Uuid
+  seat_session_id                                  String?        @db.Uuid
+  customer_id                                      String?        @db.Uuid
+  status                                           order_status   @default(open)
+  created_by                                       String         @db.Uuid
+  cancelled_by                                     String?        @db.Uuid
+  cancel_reason                                    String?
+  created_at                                       DateTime       @default(now()) @db.Timestamptz(6)
+  updated_at                                       DateTime       @default(now()) @db.Timestamptz(6)
+  invoices                                         invoices[]
+  order_items                                      order_items[]
+  branches                                         branches       @relation(fields: [branch_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_orders_branch_id")
+  users_orders_cancelled_by_organization_idTousers users?         @relation("orders_cancelled_by_organization_idTousers", fields: [cancelled_by, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_orders_cancelled_by")
+  users_orders_created_by_organization_idTousers   users          @relation("orders_created_by_organization_idTousers", fields: [created_by, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_orders_created_by")
+  users_orders_customer_id_organization_idTousers  users?         @relation("orders_customer_id_organization_idTousers", fields: [customer_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_orders_customer_id")
+  organizations                                    organizations  @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_orders_organization_id")
+  seat_sessions                                    seat_sessions? @relation(fields: [seat_session_id, branch_id], references: [id, branch_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_orders_seat_session_id")
+
+  @@unique([id, branch_id], map: "uq_orders_id_branch")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model organizations {
+  id                    String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                  String                  @db.VarChar(200)
+  slug                  String                  @db.VarChar(50)
+  bank_bin              String?                 @db.VarChar(10)
+  bank_account_number   String?                 @db.VarChar(30)
+  bank_account_name     String?                 @db.VarChar(100)
+  created_at            DateTime                @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime                @default(now()) @db.Timestamptz(6)
+  deleted_at            DateTime?               @db.Timestamptz(6)
+  announcement_reads    announcement_reads[]
+  announcements         announcements[]
+  book_copies           book_copies[]
+  book_embeddings       book_embeddings[]
+  book_loans            book_loans[]
+  book_search_logs      book_search_logs[]
+  books                 books[]
+  branch_products       branch_products[]
+  branches              branches[]
+  idea_comments         idea_comments[]
+  ideas                 ideas[]
+  invoices              invoices[]
+  membership_plans      membership_plans[]
+  memberships           memberships[]
+  order_items           order_items[]
+  orders                orders[]
+  payments              payments[]
+  price_rules           price_rules[]
+  products              products[]
+  seat_session_segments seat_session_segments[]
+  seat_sessions         seat_sessions[]
+  time_slots            time_slots[]
+  user_roles            user_roles[]
+  users                 users[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model payments {
+  id                                                 String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                    String         @db.Uuid
+  branch_id                                          String         @db.Uuid
+  invoice_id                                         String         @db.Uuid
+  method                                             payment_method
+  amount                                             BigInt
+  status                                             payment_status @default(pending)
+  transfer_reference                                 String?        @db.VarChar(30)
+  created_by                                         String         @db.Uuid
+  confirmed_by                                       String?        @db.Uuid
+  confirmed_at                                       DateTime?      @db.Timestamptz(6)
+  cancelled_by                                       String?        @db.Uuid
+  cancel_reason                                      String?
+  created_at                                         DateTime       @default(now()) @db.Timestamptz(6)
+  updated_at                                         DateTime       @default(now()) @db.Timestamptz(6)
+  branches                                           branches       @relation(fields: [branch_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_payments_branch_id")
+  users_payments_cancelled_by_organization_idTousers users?         @relation("payments_cancelled_by_organization_idTousers", fields: [cancelled_by, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_payments_cancelled_by")
+  users_payments_confirmed_by_organization_idTousers users?         @relation("payments_confirmed_by_organization_idTousers", fields: [confirmed_by, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_payments_confirmed_by")
+  users_payments_created_by_organization_idTousers   users          @relation("payments_created_by_organization_idTousers", fields: [created_by, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_payments_created_by")
+  invoices                                           invoices       @relation(fields: [invoice_id, branch_id], references: [id, branch_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_payments_invoice_id")
+  organizations                                      organizations  @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_payments_organization_id")
+
+  @@index([invoice_id], map: "ix_payments_invoice")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model price_rules {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String        @db.Uuid
+  branch_id       String        @db.Uuid
+  time_slot_id    String        @db.Uuid
+  seating_type    seating_type
+  price_per_hour  BigInt
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime      @default(now()) @db.Timestamptz(6)
+  deleted_at      DateTime?     @db.Timestamptz(6)
+  branches        branches      @relation(fields: [branch_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_price_rules_branch_id")
+  organizations   organizations @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_price_rules_organization_id")
+  time_slots      time_slots    @relation(fields: [time_slot_id, branch_id], references: [id, branch_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_price_rules_time_slot_id")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model products {
+  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String            @db.Uuid
+  name            String            @db.VarChar(200)
+  category        product_category
+  default_price   BigInt
+  created_at      DateTime          @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime          @default(now()) @db.Timestamptz(6)
+  deleted_at      DateTime?         @db.Timestamptz(6)
+  branch_products branch_products[]
+  order_items     order_items[]
+  organizations   organizations     @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_products_organization_id")
+
+  @@unique([id, organization_id], map: "uq_products_id_org")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This table contains exclusion constraints and requires additional setup for migrations. Visit https://pris.ly/d/exclusion-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model seat_session_segments {
+  id                       String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id          String        @db.Uuid
+  branch_id                String        @db.Uuid
+  seat_session_id          String        @db.Uuid
+  time_slot_id             String        @db.Uuid
+  started_at               DateTime      @db.Timestamptz(6)
+  ended_at                 DateTime      @db.Timestamptz(6)
+  price_per_hour           BigInt
+  amount                   BigInt
+  is_covered_by_membership Boolean       @default(false)
+  created_at               DateTime      @default(now()) @db.Timestamptz(6)
+  branches                 branches      @relation(fields: [branch_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_seat_session_segments_branch_id")
+  organizations            organizations @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_seat_session_segments_organization_id")
+  seat_sessions            seat_sessions @relation(fields: [seat_session_id, branch_id], references: [id, branch_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_seat_session_segments_seat_session_id")
+  time_slots               time_slots    @relation(fields: [time_slot_id, branch_id], references: [id, branch_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_seat_session_segments_time_slot_id")
+
+  @@index([time_slot_id], map: "ix_segments_time_slot")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model seat_sessions {
+  id                                                     String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                        String                  @db.Uuid
+  branch_id                                              String                  @db.Uuid
+  customer_id                                            String                  @db.Uuid
+  seating_type                                           seating_type
+  membership_id                                          String?                 @db.Uuid
+  status                                                 session_status          @default(active)
+  started_at                                             DateTime                @default(now()) @db.Timestamptz(6)
+  ended_at                                               DateTime?               @db.Timestamptz(6)
+  closed_at                                              DateTime?               @db.Timestamptz(6)
+  close_type                                             close_type?
+  close_reason                                           String?
+  opened_by                                              String                  @db.Uuid
+  closed_by                                              String?                 @db.Uuid
+  voided_by                                              String?                 @db.Uuid
+  voided_at                                              DateTime?               @db.Timestamptz(6)
+  void_reason                                            String?
+  created_at                                             DateTime                @default(now()) @db.Timestamptz(6)
+  updated_at                                             DateTime                @default(now()) @db.Timestamptz(6)
+  book_loans                                             book_loans[]
+  invoices                                               invoices[]
+  orders                                                 orders[]
+  seat_session_segments                                  seat_session_segments[]
+  branches                                               branches                @relation(fields: [branch_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_seat_sessions_branch_id")
+  users_seat_sessions_closed_by_organization_idTousers   users?                  @relation("seat_sessions_closed_by_organization_idTousers", fields: [closed_by, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_seat_sessions_closed_by")
+  users_seat_sessions_customer_id_organization_idTousers users                   @relation("seat_sessions_customer_id_organization_idTousers", fields: [customer_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_seat_sessions_customer_id")
+  memberships                                            memberships?            @relation(fields: [membership_id, customer_id], references: [id, customer_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_seat_sessions_membership_id")
+  users_seat_sessions_opened_by_organization_idTousers   users                   @relation("seat_sessions_opened_by_organization_idTousers", fields: [opened_by, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_seat_sessions_opened_by")
+  organizations                                          organizations           @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_seat_sessions_organization_id")
+  users_seat_sessions_voided_by_organization_idTousers   users?                  @relation("seat_sessions_voided_by_organization_idTousers", fields: [voided_by, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_seat_sessions_voided_by")
+
+  @@unique([id, branch_id], map: "uq_seat_sessions_id_branch")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This table contains exclusion constraints and requires additional setup for migrations. Visit https://pris.ly/d/exclusion-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model time_slots {
+  id                    String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id       String                  @db.Uuid
+  branch_id             String                  @db.Uuid
+  name                  String                  @db.VarChar(50)
+  day_of_week           Int                     @db.SmallInt
+  start_time            DateTime                @db.Time(6)
+  end_time              DateTime                @db.Time(6)
+  created_at            DateTime                @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime                @default(now()) @db.Timestamptz(6)
+  deleted_at            DateTime?               @db.Timestamptz(6)
+  price_rules           price_rules[]
+  seat_session_segments seat_session_segments[]
+  branches              branches                @relation(fields: [branch_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_branch_id")
+  organizations         organizations           @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_organization_id")
+
+  @@unique([id, branch_id], map: "uq_time_slots_id_branch")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model user_roles {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String        @db.Uuid
+  user_id         String        @db.Uuid
+  branch_id       String?       @db.Uuid
+  role            user_role
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime      @default(now()) @db.Timestamptz(6)
+  deleted_at      DateTime?     @db.Timestamptz(6)
+  branches        branches?     @relation(fields: [branch_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_user_roles_branch_id")
+  organizations   organizations @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_user_roles_organization_id")
+  users           users         @relation(fields: [user_id, organization_id], references: [id, organization_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_user_roles_user_id")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model users {
+  id                                                             String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                                String               @db.Uuid
+  full_name                                                      String?              @db.VarChar(200)
+  phone                                                          String?              @db.VarChar(20)
+  email                                                          String?              @db.VarChar(255)
+  password_hash                                                  String?
+  member_code                                                    String               @db.VarChar(32)
+  is_guest                                                       Boolean              @default(false)
+  created_at                                                     DateTime             @default(now()) @db.Timestamptz(6)
+  updated_at                                                     DateTime             @default(now()) @db.Timestamptz(6)
+  deleted_at                                                     DateTime?            @db.Timestamptz(6)
+  announcement_reads                                             announcement_reads[]
+  announcements                                                  announcements[]
+  book_loans_book_loans_customer_id_organization_idTousers       book_loans[]         @relation("book_loans_customer_id_organization_idTousers")
+  book_loans_book_loans_issued_by_organization_idTousers         book_loans[]         @relation("book_loans_issued_by_organization_idTousers")
+  book_loans_book_loans_received_by_organization_idTousers       book_loans[]         @relation("book_loans_received_by_organization_idTousers")
+  book_search_logs                                               book_search_logs[]
+  idea_comments                                                  idea_comments[]
+  ideas_ideas_author_id_organization_idTousers                   ideas[]              @relation("ideas_author_id_organization_idTousers")
+  ideas_ideas_deleted_by_organization_idTousers                  ideas[]              @relation("ideas_deleted_by_organization_idTousers")
+  ideas_ideas_resolved_by_organization_idTousers                 ideas[]              @relation("ideas_resolved_by_organization_idTousers")
+  invoices_invoices_cancelled_by_organization_idTousers          invoices[]           @relation("invoices_cancelled_by_organization_idTousers")
+  invoices_invoices_created_by_organization_idTousers            invoices[]           @relation("invoices_created_by_organization_idTousers")
+  invoices_invoices_customer_id_organization_idTousers           invoices[]           @relation("invoices_customer_id_organization_idTousers")
+  memberships_memberships_cancelled_by_organization_idTousers    memberships[]        @relation("memberships_cancelled_by_organization_idTousers")
+  memberships_memberships_customer_id_organization_idTousers     memberships[]        @relation("memberships_customer_id_organization_idTousers")
+  order_items                                                    order_items[]
+  orders_orders_cancelled_by_organization_idTousers              orders[]             @relation("orders_cancelled_by_organization_idTousers")
+  orders_orders_created_by_organization_idTousers                orders[]             @relation("orders_created_by_organization_idTousers")
+  orders_orders_customer_id_organization_idTousers               orders[]             @relation("orders_customer_id_organization_idTousers")
+  payments_payments_cancelled_by_organization_idTousers          payments[]           @relation("payments_cancelled_by_organization_idTousers")
+  payments_payments_confirmed_by_organization_idTousers          payments[]           @relation("payments_confirmed_by_organization_idTousers")
+  payments_payments_created_by_organization_idTousers            payments[]           @relation("payments_created_by_organization_idTousers")
+  seat_sessions_seat_sessions_closed_by_organization_idTousers   seat_sessions[]      @relation("seat_sessions_closed_by_organization_idTousers")
+  seat_sessions_seat_sessions_customer_id_organization_idTousers seat_sessions[]      @relation("seat_sessions_customer_id_organization_idTousers")
+  seat_sessions_seat_sessions_opened_by_organization_idTousers   seat_sessions[]      @relation("seat_sessions_opened_by_organization_idTousers")
+  seat_sessions_seat_sessions_voided_by_organization_idTousers   seat_sessions[]      @relation("seat_sessions_voided_by_organization_idTousers")
+  user_roles                                                     user_roles[]
+  organizations                                                  organizations        @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_users_organization_id")
+
+  @@unique([id, organization_id], map: "uq_users_id_org")
+}
+
+enum announcement_audience {
+  customers
+  staff
+  all
+}
+
+enum close_type {
+  normal
+  manual
+}
+
+enum copy_status {
+  available
+  on_loan
+  lost
+  damaged
+}
+
+enum deposit_status {
+  held
+  refunded
+  forfeited
+}
+
+enum idea_status {
+  pending
+  reviewing
+  resolved
+  rejected
+}
+
+enum invoice_status {
+  unpaid
+  paid
+  cancelled
+}
+
+enum loan_status {
+  active
+  returned
+  lost
+  cancelled
+}
+
+enum loan_type {
+  in_place
+  take_home
+}
+
+enum membership_status {
+  pending
+  active
+  cancelled
+}
+
+enum order_item_status {
+  active
+  void
+}
+
+enum order_status {
+  open
+  confirmed
+  cancelled
+}
+
+enum payment_method {
+  cash
+  bank_transfer
+}
+
+enum payment_status {
+  pending
+  confirmed
+  cancelled
+}
+
+enum product_category {
+  drink
+  food
+}
+
+enum search_mode {
+  fts
+  vector
+  hybrid
+}
+
+enum seating_type {
+  laptop
+  no_laptop
+}
+
+enum session_status {
+  active
+  closed
+  void
+}
+
+enum user_role {
+  owner
+  branch_manager
+  staff
+  customer
 }

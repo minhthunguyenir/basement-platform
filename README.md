@@ -73,7 +73,7 @@ basement-platform/
 │   │
 │   └── api/                        # Backend Application (NestJS + Prisma)
 │       ├── src/
-│       │   ├── prisma/             # PrismaService tích hợp withBranch RLS
+│       │   ├── prisma/             # PrismaService.withContext(): gán ngữ cảnh RLS (tổ chức + người dùng)
 │       │   ├── health/             # Health check & test RLS endpoint
 │       │   └── main.ts             # Port 3001
 │       ├── prisma/
@@ -138,10 +138,13 @@ cp .env.example .env
 Các tham số cấu hình chính:
 ```env
 # Database (PostgreSQL + pgvector)
+# Runtime: BẮT BUỘC role basement_app (bị RLS lọc). Migration: DIRECT_URL (owner/superuser).
 # Chạy ngoài Docker (localhost):
-DATABASE_URL="postgresql://postgres:postgres@localhost:5432/basement_db?schema=public"
-# Chạy trong container Docker:
-# DATABASE_URL="postgresql://postgres:postgres@postgres:5432/basement_db?schema=public"
+DATABASE_URL="postgresql://basement_app:basement_app_local@localhost:5432/basement_db?schema=public"
+DIRECT_URL="postgresql://postgres:postgres@localhost:5432/basement_db?schema=public"
+# Chạy trong container Docker: thay localhost bằng postgres
+BASEMENT_APP_PASSWORD=basement_app_local
+DEFAULT_ORGANIZATION_ID=   # uuid tổ chức, dùng tạm đến khi có xác thực
 
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
@@ -271,28 +274,36 @@ volumes:
 ### 5. Cấu hình Prisma & Database Migration (RLS)
 Áp dụng Prisma migration lên PostgreSQL và sinh Prisma Client:
 
+Lược đồ gốc nằm ở [`docs/db`](./docs/db/README.md) (25 bảng, RLS theo tổ chức và người dùng). Migration baseline `apps/api/prisma/migrations/*_basement_baseline` được ghép từ `01_schema.sql` + `02_triggers.sql` + `03_rls.sql`.
+
 ```bash
 # Tạo Prisma Client
 pnpm --filter @basement/api prisma generate
 
-# Áp dụng migration (bao gồm kích hoạt pgvector và chính sách Row-Level Security)
-pnpm --filter @basement/api prisma migrate dev
+# Áp dụng migration (dùng DIRECT_URL): pgvector, 25 bảng, trigger, role DB và chính sách RLS
+pnpm --filter @basement/api prisma migrate deploy
+
+# Đặt mật khẩu cho role ứng dụng (một lần, khớp với DATABASE_URL)
+docker exec -i basement_postgres psql -U postgres -d basement_db -c "ALTER ROLE basement_app PASSWORD 'basement_app_local';"
+
+# Nạp dữ liệu mẫu (1 tổ chức, 3 chi nhánh HCM/DAD/VCA, nhân viên, khách, bảng giá, sách, 3 phiên đang mở).
+# Chạy lại được nhiều lần; chỉ dùng cho dev/staging. Tổ chức mẫu: DEFAULT_ORGANIZATION_ID=00000000-0000-4000-a000-000000000001
+pnpm --filter @basement/api db:seed
 
 # (Tùy chọn) Mở giao diện Prisma Studio để kiểm tra dữ liệu
 pnpm --filter @basement/api prisma studio
 ```
 
+> Tạo migration mới: luôn dùng `prisma migrate dev --create-only`, đọc lại SQL rồi mới áp dụng. Prisma không biểu diễn được partial index, exclusion constraint, CHECK và policy RLS, nên phải bảo đảm migration không xóa chúng.
+
 #### Kiểm thử Row-Level Security (RLS)
-API cung cấp sẵn endpoint kiểm tra kết nối database và cơ chế phân quyền cô lập dữ liệu theo từng chi nhánh (`app.current_branch`):
 
 ```bash
-# Kiểm tra tự động tính cô lập dữ liệu giữa 3 chi nhánh (HCM, DAD, VCA):
+# Kiểm tra cấu hình đang chạy: kết nối bằng basement_app, 25/25 bảng ép RLS, không có ngữ cảnh thì không đọc được dữ liệu
 curl http://localhost:3001/health/rls-test
 
-# Truy vấn dữ liệu riêng cho từng chi nhánh:
-curl "http://localhost:3001/health/rls-test?branch=HCM"
-curl "http://localhost:3001/health/rls-test?branch=DAD"
-curl "http://localhost:3001/health/rls-test?branch=VCA"
+# Bộ 50 ca kiểm thử phân quyền (tự ROLLBACK, không để lại dữ liệu; CI chạy tự động ở job db-rls)
+docker exec -i basement_postgres psql -U postgres -d basement_db -v ON_ERROR_STOP=1 < docs/db/04_rls_tests.sql
 ```
 
 ### 6. Chạy Ứng dụng trong Môi trường Phát triển (Native pnpm)

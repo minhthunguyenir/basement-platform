@@ -33,6 +33,7 @@ jobs:
         run: pnpm --filter @basement/api prisma generate
         env:
           DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/basement_db"
+          DIRECT_URL: "postgresql://postgres:postgres@localhost:5432/basement_db"
 
       - name: Run Lint
         run: pnpm lint
@@ -41,4 +42,54 @@ jobs:
         run: pnpm build
         env:
           DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/basement_db?schema=public"
+          DIRECT_URL: "postgresql://postgres:postgres@localhost:5432/basement_db?schema=public"
           NEXT_PUBLIC_API_URL: "http://localhost:3001"
+
+  db-rls:
+    name: Migrate & RLS Tests (PostgreSQL 16 + pgvector)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: basement_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Migration và bộ kiểm thử chạy bằng superuser; 04_rls_tests.sql tự SET ROLE basement_app.
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/basement_db?schema=public"
+      DIRECT_URL: "postgresql://postgres:postgres@localhost:5432/basement_db?schema=public"
+      PGPASSWORD: postgres
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply Prisma Migrations
+        run: pnpm --filter @basement/api prisma migrate deploy
+
+      - name: Run RLS Tests (docs/db/04_rls_tests.sql)
+        run: |
+          psql -h localhost -U postgres -d basement_db -v ON_ERROR_STOP=1 -f docs/db/04_rls_tests.sql | tee rls-results.txt
+          if grep -q 'LỖI' rls-results.txt; then echo "::error::Có ca kiểm thử RLS bị LỖI"; exit 1; fi
+          grep -Eq '^ *([0-9]+)/\1 ca đạt' rls-results.txt || { echo "::error::Không thấy dòng tổng kết N/N ca đạt"; exit 1; }

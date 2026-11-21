@@ -1058,6 +1058,18 @@ BEGIN
     END IF;
 END $$;
 
+-- Vai trò có thể đã tồn tại từ trước với thuộc tính khác (vai trò thuộc cả cụm, không riêng
+-- database; vd. còn sót từ bản prototype). Chuẩn hóa lại để luôn đúng thiết kế.
+-- Không đụng SUPERUSER (chỉ superuser mới đổi được) và PASSWORD (đặt ngoài file này).
+ALTER ROLE basement_security NOLOGIN BYPASSRLS;
+ALTER ROLE basement_app LOGIN NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT;
+
+-- Cho vai trò đang chạy file này quyền SET ROLE sang hai vai trò trên. Bắt buộc khi chạy bằng
+-- owner không phải superuser (vd. neondb_owner trên Neon): ALTER FUNCTION ... OWNER TO ở mục 4
+-- đòi quyền này, và 04_rls_tests.sql dùng SET ROLE basement_app. Với superuser thì vô hại.
+GRANT basement_security TO CURRENT_USER;
+GRANT basement_app TO CURRENT_USER;
+
 CREATE SCHEMA IF NOT EXISTS app;
 REVOKE ALL ON SCHEMA app FROM PUBLIC;
 GRANT USAGE ON SCHEMA app TO basement_app, basement_security;
@@ -1197,6 +1209,10 @@ GRANT SELECT ON user_roles, branches, seat_sessions TO basement_security;
 GRANT SELECT, INSERT, UPDATE ON users TO basement_security;
 GRANT INSERT ON user_roles TO basement_security;
 
+-- ALTER FUNCTION ... OWNER TO đòi chủ mới có quyền CREATE trên schema chứa hàm (superuser được
+-- miễn kiểm tra này, owner thường thì không). Cấp tạm rồi thu hồi ngay sau khi đổi chủ.
+GRANT CREATE ON SCHEMA app TO basement_security;
+
 ALTER FUNCTION app.is_staff()                     OWNER TO basement_security;
 ALTER FUNCTION app.is_manager()                   OWNER TO basement_security;
 ALTER FUNCTION app.is_owner()                     OWNER TO basement_security;
@@ -1206,6 +1222,8 @@ ALTER FUNCTION app.branch_occupancy()             OWNER TO basement_security;
 ALTER FUNCTION app.customer_active_session(uuid)  OWNER TO basement_security;
 ALTER FUNCTION app.login_lookup(text)             OWNER TO basement_security;
 ALTER FUNCTION app.register_customer(varchar, varchar, varchar, text, varchar) OWNER TO basement_security;
+
+REVOKE CREATE ON SCHEMA app FROM basement_security;
 
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA app FROM PUBLIC;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO basement_app;

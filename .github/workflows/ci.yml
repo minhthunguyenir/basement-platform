@@ -20,10 +20,10 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js (theo .nvmrc)
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: 'pnpm'
 
       - name: Install Dependencies
@@ -37,6 +37,10 @@ jobs:
 
       - name: Run Lint
         run: pnpm lint
+
+      # Jest cần Node >= 24.9 để require() các package ESM-only của NestJS 12.
+      - name: Run Unit Tests
+        run: pnpm test
 
       - name: Run Build
         run: pnpm build
@@ -76,10 +80,10 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js (theo .nvmrc)
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: 'pnpm'
 
       - name: Install Dependencies

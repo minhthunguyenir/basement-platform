@@ -3,8 +3,9 @@
 -- Chạy lại nhiều lần được: mọi id cố định và INSERT ... ON CONFLICT (id) DO NOTHING.
 -- Sau khi seed, đặt DEFAULT_ORGANIZATION_ID=00000000-0000-4000-a000-000000000001
 --
--- Mật khẩu: password_hash là placeholder bắt đầu bằng '!' (không phải hash hợp lệ),
--- nên chưa ai đăng nhập được. Khi phân hệ A chốt thuật toán băm, cập nhật lại các dòng này.
+-- Mật khẩu: password_hash là placeholder bắt đầu bằng '!' (không phải hash hợp lệ), nên sau khi seed
+-- chưa ai đăng nhập được. Đặt mật khẩu thật (scrypt) bằng: pnpm --filter @basement/api db:set-dev-passwords
+-- (đọc SEED_USER_PASSWORD; mật khẩu không nằm trong repo).
 --
 -- id sinh tự động dùng md5('seed:<khóa>')::uuid để cố định giữa các lần chạy.
 

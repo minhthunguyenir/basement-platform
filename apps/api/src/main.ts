@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { StandardSchemaValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
@@ -7,6 +8,8 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   app.enableCors();
+  // Kiểm tra dữ liệu vào bằng Zod: chỉ áp dụng cho tham số khai báo `{ schema }`, ví dụ @Body({ schema }).
+  app.useGlobalPipes(new StandardSchemaValidationPipe());
 
   // Cấu hình Swagger Documentation
   const swaggerConfig = new DocumentBuilder()
@@ -14,6 +17,8 @@ async function bootstrap() {
     .setDescription('Tài liệu đặc tả API cho hệ sinh thái Basement Platform (Monorepo)')
     .setVersion('1.0')
     .addTag('health', 'Endpoints kiểm tra sức khỏe hệ thống, kết nối cơ sở dữ liệu và Row-Level Security')
+    .addTag('auth', 'Đăng nhập và thông tin người dùng hiện tại')
+    .addBearerAuth()
     .build();
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);

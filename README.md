@@ -144,7 +144,9 @@ DATABASE_URL="postgresql://basement_app:basement_app_local@localhost:5432/baseme
 DIRECT_URL="postgresql://postgres:postgres@localhost:5432/basement_db?schema=public"
 # Chạy trong container Docker: thay localhost bằng postgres
 BASEMENT_APP_PASSWORD=basement_app_local
-DEFAULT_ORGANIZATION_ID=   # uuid tổ chức, dùng tạm đến khi có xác thực
+DEFAULT_ORGANIZATION_ID=   # uuid tổ chức dùng khi chưa đăng nhập (và khi đăng nhập)
+AUTH_JWT_SECRET=           # khóa ký access token, >= 32 byte: openssl rand -base64 32
+SEED_USER_PASSWORD=        # mật khẩu cho tài khoản seed (>= 12 ký tự), dùng bởi db:set-dev-passwords
 
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
@@ -290,11 +292,33 @@ docker exec -i basement_postgres psql -U postgres -d basement_db -c "ALTER ROLE 
 # Chạy lại được nhiều lần; chỉ dùng cho dev/staging. Tổ chức mẫu: DEFAULT_ORGANIZATION_ID=00000000-0000-4000-a000-000000000001
 pnpm --filter @basement/api db:seed
 
+# Đặt mật khẩu cho các tài khoản seed (lấy từ SEED_USER_PASSWORD), để thử đăng nhập
+pnpm --filter @basement/api db:set-dev-passwords
+
 # (Tùy chọn) Mở giao diện Prisma Studio để kiểm tra dữ liệu
 pnpm --filter @basement/api prisma studio
 ```
 
 > Tạo migration mới: luôn dùng `prisma migrate dev --create-only`, đọc lại SQL rồi mới áp dụng. Prisma không biểu diễn được partial index, exclusion constraint, CHECK và policy RLS, nên phải bảo đảm migration không xóa chúng.
+
+#### Đăng nhập (xác thực)
+
+Mọi API cần access token, trừ các route đánh dấu `@Public()` (health, đăng nhập). Đăng nhập bằng email hoặc số điện thoại của tài khoản seed, ví dụ `staff.hcm@basement.local`, `owner@basement.local`, `0900000011`:
+
+```bash
+# Nhận access token (Bearer, hiệu lực 12 giờ; hết hạn thì đăng nhập lại)
+curl -X POST http://localhost:3001/auth/login -H "Content-Type: application/json" \
+  -d '{"login":"staff.hcm@basement.local","password":"<SEED_USER_PASSWORD>"}'
+
+# Gọi API kèm token
+curl http://localhost:3001/auth/me -H "Authorization: Bearer <accessToken>"
+```
+
+Trên Swagger (`/api/docs`), bấm **Authorize** rồi dán `accessToken` để thử các API cần đăng nhập.
+
+Trên giao diện web: mở `http://localhost:3000/login`, đăng nhập xong sẽ về trang chủ hiển thị tài khoản và vai trò, có nút **Đăng xuất**. Web gọi API theo `NEXT_PUBLIC_API_URL` (mẫu ở `apps/web/.env.example`, để trống thì dùng `http://localhost:3001`). Token lưu ở `localStorage` của trình duyệt và hết hạn sau 12 giờ.
+
+Mỗi tài khoản (email/số điện thoại) được thử đăng nhập tối đa 5 lần/phút; lần thứ 6 nhận `429`. Bộ đếm nằm trong bộ nhớ của API, khởi động lại API thì đếm lại từ đầu.
 
 #### Kiểm thử Row-Level Security (RLS)
 

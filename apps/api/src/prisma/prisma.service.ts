@@ -1,5 +1,6 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { Prisma, PrismaClient } from '@prisma/client';
+import { isUuid } from '../common/uuid';
 
 /** Ngữ cảnh RLS của một giao dịch (xem docs/db/03_rls.sql). */
 export interface DbContext {
@@ -8,8 +9,6 @@ export interface DbContext {
   /** uuid người dùng đã đăng nhập; bỏ trống khi chưa đăng nhập. */
   userId?: string | null;
 }
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
@@ -46,10 +45,10 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
    */
   withContext<T>(context: DbContext, callback: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
     const { organizationId, userId } = context;
-    if (!UUID_RE.test(organizationId)) {
+    if (!isUuid(organizationId)) {
       throw new Error('withContext: organizationId phải là uuid hợp lệ');
     }
-    if (userId && !UUID_RE.test(userId)) {
+    if (userId && !isUuid(userId)) {
       throw new Error('withContext: userId phải là uuid hợp lệ');
     }
     return this.$transaction(async (tx) => {

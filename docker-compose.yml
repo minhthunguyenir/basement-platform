@@ -46,6 +46,7 @@ services:
       - DATABASE_URL=postgresql://basement_app:${BASEMENT_APP_PASSWORD:-basement_app_local}@postgres:5432/${POSTGRES_DB:-basement_db}?schema=public
       - DIRECT_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-basement_db}?schema=public
       - DEFAULT_ORGANIZATION_ID=${DEFAULT_ORGANIZATION_ID:-}
+      - AUTH_JWT_SECRET=${AUTH_JWT_SECRET:-}
       - REDIS_URL=redis://redis:6379
       - REDIS_HOST=redis
       - REDIS_PORT=6379
